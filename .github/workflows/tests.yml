@@ -1,0 +1,131 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: "0 7 * * 1"   # weekly: the datasets change independently of this repo
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - run: uv sync --locked --extra dev
+      - name: Ruff format
+        run: uv run ruff format --check .
+      - name: Ruff lint
+        run: uv run ruff check .
+      - name: Mypy
+        run: uv run mypy
+      - name: Complexity (lizard)
+        run: uv run lizard -L 120 -C 15 -w src tests
+
+  test:
+    needs: quality
+    strategy:
+      fail-fast: false
+      matrix:
+        # Every supported Python on every OS.
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        python: ["3.12", "3.13", "3.14"]
+        experimental: [false]
+        include:
+          # Pre-release: reported, but does not fail the run.
+          - { os: ubuntu-latest, python: "3.15", experimental: true }
+          - { os: macos-latest, python: "3.15", experimental: true }
+          - { os: windows-latest, python: "3.15", experimental: true }
+    name: test (${{ matrix.os }}, ${{ matrix.python }})
+    runs-on: ${{ matrix.os }}
+    continue-on-error: ${{ matrix.experimental }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: ${{ matrix.python }}
+      - run: uv sync --locked --extra dev
+      - name: Pytest
+        run: uv run pytest --cov --cov-report=term --cov-report=xml -W error::DeprecationWarning
+      - name: Upload golden-frame diffs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: golden-diffs-${{ matrix.os }}-${{ matrix.python }}
+          path: tests/golden/*.actual.png
+          if-no-files-found: ignore
+
+  lowest:
+    # The oldest dependency versions pyproject.toml allows must still work.
+    # Golden frames and the schema snapshot are tied to the locked versions.
+    needs: quality
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.12"
+      - name: Pytest with the minimum dependency versions
+        run: >
+          uv run --isolated --resolution lowest-direct --extra dev
+          pytest -W error::DeprecationWarning --deselect tests/test_golden.py
+          --deselect tests/test_config.py::test_committed_schema_is_up_to_date
+
+  package:
+    needs: quality
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - name: Build sdist and wheel
+        run: uv build
+      - name: Smoke-test the installed wheel outside the checkout
+        working-directory: ${{ runner.temp }}
+        run: |
+          uv venv smoke
+          uv pip install --python smoke "$GITHUB_WORKSPACE"/dist/*.whl
+          smoke/bin/fromversionzero --version
+          smoke/bin/fromversionzero validate --data-root "$GITHUB_WORKSPACE/tests/fixtures/data" --strict
+          printf '{"resolution":"240p","fps":4,"ssaa_factor":1,"intro_duration":0.5,"outro_duration":0.5,"hold_duration":0.5,"speculation_duration":1}' > video.json
+          smoke/bin/fromversionzero render --product Widget --data-root "$GITHUB_WORKSPACE/tests/fixtures/data" --output-folder out
+          test -s out/Widget_landscape_240p.mp4
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+  examples:
+    needs: quality
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - run: uv sync --locked
+      - name: Validate the example dataset
+        run: uv run fromversionzero validate --data-root examples --strict
+
+  datasets:
+    # fromversionzero-data is the source of truth for the data format: every
+    # published dataset must validate against the generator.
+    needs: quality
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: ninja7v/fromversionzero-data
+          path: data
+      - uses: astral-sh/setup-uv@v6
+      - run: uv sync --locked
+      - name: Validate every published dataset
+        run: uv run fromversionzero validate --data-root data --strict
+      - name: Example matches its published version
+        run: |
+          diff -r -x description.md examples/Vehicle/Porsche_911 data/Vehicle/Porsche_911
+          diff examples/Vehicle/units.json data/Vehicle/units.json

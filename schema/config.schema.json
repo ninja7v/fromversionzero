@@ -1,0 +1,710 @@
+{
+  "$defs": {
+    "CameraSettings": {
+      "additionalProperties": false,
+      "properties": {
+        "speed": {
+          "default": 2.5,
+          "exclusiveMinimum": 0,
+          "title": "Speed",
+          "type": "number"
+        }
+      },
+      "title": "CameraSettings",
+      "type": "object"
+    },
+    "ColorOverrides": {
+      "additionalProperties": false,
+      "properties": {
+        "background": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Background"
+        },
+        "grid": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Grid"
+        },
+        "grid_dots": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Grid Dots"
+        },
+        "line": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Line"
+        },
+        "line_glow": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Line Glow"
+        },
+        "text_primary": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Text Primary"
+        },
+        "text_secondary": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Text Secondary"
+        },
+        "accent": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Accent"
+        },
+        "accent_glow": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Accent Glow"
+        },
+        "line_colors": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "minItems": 1,
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Line Colors"
+        }
+      },
+      "title": "ColorOverrides",
+      "type": "object"
+    },
+    "EncodingSettings": {
+      "additionalProperties": false,
+      "properties": {
+        "codec": {
+          "default": "h264",
+          "enum": [
+            "h264",
+            "h265"
+          ],
+          "title": "Codec",
+          "type": "string"
+        },
+        "crf": {
+          "default": 18,
+          "maximum": 51,
+          "minimum": 0,
+          "title": "Crf",
+          "type": "integer"
+        },
+        "preset": {
+          "default": "medium",
+          "enum": [
+            "ultrafast",
+            "superfast",
+            "veryfast",
+            "faster",
+            "fast",
+            "medium",
+            "slow",
+            "slower",
+            "veryslow"
+          ],
+          "title": "Preset",
+          "type": "string"
+        }
+      },
+      "title": "EncodingSettings",
+      "type": "object"
+    },
+    "FontOverrides": {
+      "additionalProperties": false,
+      "properties": {
+        "display": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Display"
+        },
+        "heading": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Heading"
+        },
+        "body": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Body"
+        },
+        "label": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Label"
+        }
+      },
+      "title": "FontOverrides",
+      "type": "object"
+    },
+    "Labels": {
+      "additionalProperties": false,
+      "description": "On-screen copy. Override to localize or rebrand a video.",
+      "properties": {
+        "intro_kicker": {
+          "default": "From Version Zero  /  Evolution dossier",
+          "title": "Intro Kicker",
+          "type": "string"
+        },
+        "facts": {
+          "default": "Insight",
+          "title": "Facts",
+          "type": "string"
+        },
+        "speculation_kicker": {
+          "default": "Open question  /  Future signal",
+          "title": "Speculation Kicker",
+          "type": "string"
+        },
+        "speculation_prompt": {
+          "default": "Drop your prediction  ↓",
+          "title": "Speculation Prompt",
+          "type": "string"
+        },
+        "speculation_footer": {
+          "default": "Imagine it  •  Argue it  •  Build it",
+          "title": "Speculation Footer",
+          "type": "string"
+        },
+        "outro_kicker": {
+          "default": "Evolution complete",
+          "title": "Outro Kicker",
+          "type": "string"
+        },
+        "outro_question": {
+          "default": "What should we trace next?",
+          "title": "Outro Question",
+          "type": "string"
+        },
+        "outro_prompt": {
+          "default": "Drop your pick in the comments  ↓",
+          "title": "Outro Prompt",
+          "type": "string"
+        }
+      },
+      "title": "Labels",
+      "type": "object"
+    },
+    "MediaSettings": {
+      "additionalProperties": false,
+      "description": "Logo and generation images referenced by URL (see ``fromversionzero.media``).",
+      "properties": {
+        "logo": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Logo"
+        },
+        "logo_levels": {
+          "default": 3,
+          "maximum": 5,
+          "minimum": 2,
+          "title": "Logo Levels",
+          "type": "integer"
+        },
+        "logo_invert": {
+          "default": false,
+          "title": "Logo Invert",
+          "type": "boolean"
+        },
+        "image_levels": {
+          "default": 2,
+          "maximum": 5,
+          "minimum": 2,
+          "title": "Image Levels",
+          "type": "integer"
+        },
+        "image_invert": {
+          "default": false,
+          "title": "Image Invert",
+          "type": "boolean"
+        },
+        "stylize": {
+          "default": true,
+          "title": "Stylize",
+          "type": "boolean"
+        }
+      },
+      "title": "MediaSettings",
+      "type": "object"
+    },
+    "MusicSettings": {
+      "additionalProperties": false,
+      "properties": {
+        "file": {
+          "default": "soundtrack.mp3",
+          "title": "File",
+          "type": "string"
+        },
+        "volume": {
+          "default": 0.7,
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Volume",
+          "type": "number"
+        },
+        "fade_in": {
+          "default": 2.0,
+          "minimum": 0,
+          "title": "Fade In",
+          "type": "number"
+        },
+        "fade_out": {
+          "default": 3.0,
+          "minimum": 0,
+          "title": "Fade Out",
+          "type": "number"
+        }
+      },
+      "title": "MusicSettings",
+      "type": "object"
+    },
+    "ShortsOverrides": {
+      "additionalProperties": false,
+      "properties": {
+        "intro_duration": {
+          "default": 0.0,
+          "minimum": 0,
+          "title": "Intro Duration",
+          "type": "number"
+        },
+        "outro_duration": {
+          "default": 0.0,
+          "minimum": 0,
+          "title": "Outro Duration",
+          "type": "number"
+        },
+        "reveal_duration": {
+          "default": 2.0,
+          "exclusiveMinimum": 0,
+          "title": "Reveal Duration",
+          "type": "number"
+        },
+        "steady_duration": {
+          "default": 1.0,
+          "minimum": 0,
+          "title": "Steady Duration",
+          "type": "number"
+        },
+        "hold_duration": {
+          "default": 3.0,
+          "minimum": 0,
+          "title": "Hold Duration",
+          "type": "number"
+        },
+        "speculation_duration": {
+          "default": 5.0,
+          "minimum": 0,
+          "title": "Speculation Duration",
+          "type": "number"
+        },
+        "resolution": {
+          "default": "1080x1920",
+          "title": "Resolution",
+          "type": "string"
+        }
+      },
+      "title": "ShortsOverrides",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "Schema shared by ``video.json`` (project) and ``config.json`` (product).\n\nEvery key is optional; missing keys fall back to the defaults below. The\nJSON Schema exported from this model (``fromversionzero schema``) is the\ncontract between this generator and dataset repositories.",
+  "properties": {
+    "$schema": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "$Schema"
+    },
+    "schema_version": {
+      "default": 1,
+      "maximum": 1,
+      "minimum": 1,
+      "title": "Schema Version",
+      "type": "integer"
+    },
+    "title": {
+      "default": "Product Evolution",
+      "title": "Title",
+      "type": "string"
+    },
+    "motto": {
+      "default": "",
+      "title": "Motto",
+      "type": "string"
+    },
+    "x_metric": {
+      "default": "date",
+      "title": "X Metric",
+      "type": "string"
+    },
+    "metrics": {
+      "anyOf": [
+        {
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "type": "array"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Metrics"
+    },
+    "y_scale": {
+      "default": "auto",
+      "enum": [
+        "auto",
+        "log",
+        "linear"
+      ],
+      "title": "Y Scale",
+      "type": "string"
+    },
+    "speculation_text": {
+      "default": "What will the next generation be?",
+      "title": "Speculation Text",
+      "type": "string"
+    },
+    "labels": {
+      "$ref": "#/$defs/Labels",
+      "default": {
+        "intro_kicker": "From Version Zero  /  Evolution dossier",
+        "facts": "Insight",
+        "speculation_kicker": "Open question  /  Future signal",
+        "speculation_prompt": "Drop your prediction  ↓",
+        "speculation_footer": "Imagine it  •  Argue it  •  Build it",
+        "outro_kicker": "Evolution complete",
+        "outro_question": "What should we trace next?",
+        "outro_prompt": "Drop your pick in the comments  ↓"
+      }
+    },
+    "fps": {
+      "default": 30,
+      "exclusiveMinimum": 0,
+      "maximum": 240,
+      "title": "Fps",
+      "type": "integer"
+    },
+    "resolution": {
+      "default": "1080p",
+      "title": "Resolution",
+      "type": "string"
+    },
+    "ssaa_factor": {
+      "default": 2,
+      "maximum": 4,
+      "minimum": 1,
+      "title": "Ssaa Factor",
+      "type": "integer"
+    },
+    "downsample_filter": {
+      "default": "bicubic",
+      "enum": [
+        "bicubic",
+        "lanczos",
+        "bilinear",
+        "nearest"
+      ],
+      "title": "Downsample Filter",
+      "type": "string"
+    },
+    "image_transition": {
+      "default": "fade",
+      "enum": [
+        "fade",
+        "small_to_big_to_medium",
+        "none"
+      ],
+      "title": "Image Transition",
+      "type": "string"
+    },
+    "encoding": {
+      "$ref": "#/$defs/EncodingSettings",
+      "default": {
+        "codec": "h264",
+        "crf": 18,
+        "preset": "medium"
+      }
+    },
+    "theme": {
+      "default": "signal",
+      "title": "Theme",
+      "type": "string"
+    },
+    "colors": {
+      "$ref": "#/$defs/ColorOverrides",
+      "default": {
+        "background": null,
+        "grid": null,
+        "grid_dots": null,
+        "line": null,
+        "line_glow": null,
+        "text_primary": null,
+        "text_secondary": null,
+        "accent": null,
+        "accent_glow": null,
+        "line_colors": null
+      }
+    },
+    "fonts": {
+      "$ref": "#/$defs/FontOverrides",
+      "default": {
+        "display": null,
+        "heading": null,
+        "body": null,
+        "label": null
+      }
+    },
+    "intro_duration": {
+      "default": 3.0,
+      "minimum": 0,
+      "title": "Intro Duration",
+      "type": "number"
+    },
+    "reveal_duration": {
+      "default": 4.0,
+      "exclusiveMinimum": 0,
+      "title": "Reveal Duration",
+      "type": "number"
+    },
+    "steady_duration": {
+      "default": 2.0,
+      "minimum": 0,
+      "title": "Steady Duration",
+      "type": "number"
+    },
+    "hold_duration": {
+      "default": 5.0,
+      "minimum": 0,
+      "title": "Hold Duration",
+      "type": "number"
+    },
+    "outro_duration": {
+      "default": 3.0,
+      "minimum": 0,
+      "title": "Outro Duration",
+      "type": "number"
+    },
+    "speculation_duration": {
+      "default": 9.0,
+      "minimum": 0,
+      "title": "Speculation Duration",
+      "type": "number"
+    },
+    "fact_card_duration": {
+      "default": 4.0,
+      "minimum": 0,
+      "title": "Fact Card Duration",
+      "type": "number"
+    },
+    "camera": {
+      "$ref": "#/$defs/CameraSettings",
+      "default": {
+        "speed": 2.5
+      }
+    },
+    "shorts_overrides": {
+      "$ref": "#/$defs/ShortsOverrides",
+      "default": {
+        "intro_duration": 0.0,
+        "outro_duration": 0.0,
+        "reveal_duration": 2.0,
+        "steady_duration": 1.0,
+        "hold_duration": 3.0,
+        "speculation_duration": 5.0,
+        "resolution": "1080x1920"
+      }
+    },
+    "media": {
+      "$ref": "#/$defs/MediaSettings",
+      "default": {
+        "logo": null,
+        "logo_levels": 3,
+        "logo_invert": false,
+        "image_levels": 2,
+        "image_invert": false,
+        "stylize": true
+      }
+    },
+    "music": {
+      "$ref": "#/$defs/MusicSettings",
+      "default": {
+        "file": "soundtrack.mp3",
+        "volume": 0.7,
+        "fade_in": 2.0,
+        "fade_out": 3.0
+      }
+    },
+    "mix_sfx": {
+      "default": true,
+      "title": "Mix Sfx",
+      "type": "boolean"
+    },
+    "product_name": {
+      "default": "",
+      "title": "Product Name",
+      "type": "string"
+    },
+    "output_folder": {
+      "default": "",
+      "title": "Output Folder",
+      "type": "string"
+    },
+    "shorts": {
+      "default": false,
+      "title": "Shorts",
+      "type": "boolean"
+    },
+    "speculation": {
+      "default": true,
+      "title": "Speculation",
+      "type": "boolean"
+    },
+    "show_motto": {
+      "default": true,
+      "title": "Show Motto",
+      "type": "boolean"
+    },
+    "show_logo": {
+      "default": true,
+      "title": "Show Logo",
+      "type": "boolean"
+    },
+    "show_legend": {
+      "default": true,
+      "title": "Show Legend",
+      "type": "boolean"
+    },
+    "show_facts": {
+      "default": true,
+      "title": "Show Facts",
+      "type": "boolean"
+    },
+    "show_progress_bar": {
+      "default": true,
+      "title": "Show Progress Bar",
+      "type": "boolean"
+    }
+  },
+  "title": "FromVersionZero configuration",
+  "type": "object",
+  "$id": "https://fromversionzero.dev/schema/config-v1.json"
+}

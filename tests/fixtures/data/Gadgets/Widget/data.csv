@@ -1,0 +1,6 @@
+name,date,power,price,weight,units_sold,image,fact,speculation
+Widget (W1),2010.03,100,250,1200,15000,w1.png,first launch;hand-assembled,false
+Widget (W2),2013.09,180,320,1100,42000,,Redesigned chassis;Faster charging,false
+Widget (W3),2017.01,260,410,980,88000,,Lighter frame;New sensor array;Global release,false
+Widget (W4),2021.06,420,520,900,130000,,Flagship refresh,false
+Widget (W5),2025.06,600,640,850,170000,,Rumored next generation,true

@@ -1,0 +1,40 @@
+{
+  "product_name": "",
+  "output_folder": "",
+
+  "shorts": false,
+  "speculation": true,
+
+  "show_motto": true,
+  "show_logo": true,
+  "show_legend": true,
+  "show_facts": true,
+  "show_progress_bar": true,
+
+  "theme": "signal",
+
+  "fps": 30,
+  "resolution": "480p",
+  "mix_sfx": true,
+  "intro_duration": 3.0,
+  "reveal_duration": 4.0,
+  "steady_duration": 2.0,
+  "hold_duration": 5.0,
+  "outro_duration": 3.0,
+  "speculation_duration": 9.0,
+  "fact_card_duration": 4.0,
+
+  "camera": {
+    "speed": 2.5
+  },
+
+  "shorts_overrides": {
+    "intro_duration": 0.0,
+    "outro_duration": 0.0,
+    "reveal_duration": 2.0,
+    "steady_duration": 1.0,
+    "hold_duration": 3.0,
+    "speculation_duration": 5.0,
+    "resolution": "1080x1920"
+  }
+}

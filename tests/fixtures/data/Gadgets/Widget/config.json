@@ -1,0 +1,8 @@
+{
+  "$schema": "../../../../../schema/config.schema.json",
+  "title": "Evolution of the Widget",
+  "motto": "Built to evolve.",
+  "x_metric": "date",
+  "theme": "signal",
+  "speculation_text": "What will the next Widget be?"
+}

@@ -1,0 +1,11 @@
+{
+  "power": "hp",
+  "weight": "kg",
+  "price": "USD",
+  "top_speed": "km/h",
+  "fuel_consumption": "L/100km",
+  "acceleration_0_100": "s",
+  "drag": "Cd",
+  "range": "mi",
+  "0_to_60": "s"
+}

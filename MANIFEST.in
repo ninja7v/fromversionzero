@@ -1,0 +1,5 @@
+include ARCHITECTURE.md ASSET_POLICY.md CHANGELOG.md CONTRIBUTING.md
+recursive-include docs *.md
+recursive-include examples *.csv *.json *.md
+recursive-include schema *.json
+recursive-include tests *.py *.csv *.json *.md *.png

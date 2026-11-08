@@ -1,0 +1,13 @@
+name,date,power,weight,price,image,fact,acceleration_0_100,top_speed,drag,fuel_consumption,speculation
+911 (901/Original),1963.09,130,1080,6500,,First 911 generation with 2.0L air-cooled flat-six; Raw mechanical scream.,9.1,210,0.39,11.5,false
+911 (G-Series 2.7),1973.08,150,1140,11500,,Early impact bumpers era; Emissions start to hit performance; Mechanical whine.,8.5,210,0.40,13.5,false
+911 Carrera 3.2,1983.08,231,1160,32000,,Last evolution of classic G-body 911; Clean air-cooled roar.,6.1,245,0.38,12.5,false
+911 Carrera (964),1988.09,250,1350,55000,,"Big redesign: ABS, power steering; AWD option, mechanical precision.",5.7,260,0.32,11.8,false
+911 Carrera (993),1993.09,272,1370,60000,,Final air-cooled 911 generation; Nostalgic flat-six howl.,5.4,270,0.33,11.5,false
+911 Carrera (996),1997.09,300,1320,65000,,First water-cooled 911; Major platform reset; Sharp metallic revs.,5.2,280,0.30,10.8,false
+911 Carrera (997),2004.07,325,1420,69500,,Return of classic styling; Refined driving feel; Balanced flat-six growl.,5.0,285,0.29,10.6,false
+911 Carrera (991),2011.09,350,1450,82000,,Longer wheelbase; Big efficiency + chassis leap; Smooth high-rev tone.,4.6,289,0.29,9.2,false
+911 Carrera (991.2),2015.09,370,1430,90000,,Turbocharged flat-six introduced for efficiency; Compressed turbo flat-six note.,4.2,295,0.29,8.7,false
+911 Carrera (992),2018.11,385,1505,97000,,Wider body; Fully digital cockpit; Deep refined engine note.,4.2,293,0.29,8.9,false
+911 Carrera (992.2),2024.05,394,1520,120000,,Latest evolution; Improved efficiency + hybrid-ready systems; Smooth modern flat-six tone.,3.9,294,0.28,8.3,false
+911 (next generation),2028.11,445,1550,135000,,Speculation: next generation; Hybrid-assisted flat-six.,3.6,302,0.27,7.2,true
