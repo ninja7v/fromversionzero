@@ -91,8 +91,7 @@ def test_layering_deep_merges_nested_objects(tmp_path: Path) -> None:
     assert config.shorts_hold_duration == 9
 
 
-def test_product_overrides_formerly_global_only_keys(tmp_path: Path) -> None:
-    """mix_sfx and fact_card_duration used to be read from video.json only."""
+def test_product_overrides_mix_sfx_and_fact_card_duration(tmp_path: Path) -> None:
     general = write(tmp_path / "video.json", {"mix_sfx": True, "fact_card_duration": 4})
     product = write(tmp_path / "config.json", {"mix_sfx": False, "fact_card_duration": 2.5})
     config = VideoConfig.load(general, product)
@@ -113,12 +112,11 @@ def test_errors_name_the_offending_file(tmp_path: Path) -> None:
         VideoConfig.load(array)
 
 
-def test_deprecated_keys_and_themes_still_load(caplog: pytest.LogCaptureFixture) -> None:
-    config = VideoConfig.from_dict({"moto": "Old", "show_moto": False, "theme": "light_modern"})
-    assert config.motto == "Old"
-    assert config.show_motto is False
-    assert config.theme == "paper"
-    assert "deprecated" in caplog.text and "retired" in caplog.text
+def test_unknown_keys_and_themes_are_rejected() -> None:
+    with pytest.raises(ValueError, match="moto"):
+        VideoConfig.from_dict({"moto": "Typo"})
+    with pytest.raises(ValueError, match="Invalid theme"):
+        VideoConfig.from_dict({"theme": "light_modern"})
 
 
 def test_theme_overrides() -> None:
@@ -193,3 +191,36 @@ def test_committed_schema_is_up_to_date() -> None:
     assert json.loads(committed.read_text(encoding="utf-8")) == config_json_schema(), (
         "Run: fromversionzero schema -o schema/config.schema.json"
     )
+
+
+# ----------------------------------------------------------------------
+# Resolution limits, orientation and the published schema
+# ----------------------------------------------------------------------
+@pytest.mark.parametrize("value", ["100000x100000", "32x32", "8194x64"])
+def test_resolution_sides_are_bounded(value: str) -> None:
+    with pytest.raises(ValueError, match="out of range"):
+        VideoConfig.from_dict({"resolution": value})
+
+
+def test_resolution_must_match_the_layout_orientation() -> None:
+    with pytest.raises(ValueError, match="taller than wide"):
+        VideoConfig.from_dict({"resolution": "1080x1920"})
+    with pytest.raises(ValueError, match="wider than tall"):
+        VideoConfig.from_dict({"shorts_overrides": {"resolution": "1920x1080"}})
+    square = VideoConfig.from_dict(
+        {"resolution": "1080x1080", "shorts_overrides": {"resolution": "1080x1080"}}
+    )
+    assert (square.width, square.height) == square.shorts_resolution == (1080, 1080)
+
+
+def test_music_loop_defaults_to_true_and_round_trips() -> None:
+    assert VideoConfig.from_dict({}).music_loop is True
+    config = VideoConfig.from_dict({"music": {"loop": False}})
+    assert config.music_loop is False
+    assert VideoConfig.from_dict(config.to_dict()).music_loop is False
+
+
+def test_schema_lists_themes_and_has_a_reachable_id() -> None:
+    schema = config_json_schema()
+    assert schema["properties"]["theme"]["enum"] == sorted(THEMES)
+    assert schema["$id"].startswith("https://raw.githubusercontent.com/ninja7v/fromversionzero/")

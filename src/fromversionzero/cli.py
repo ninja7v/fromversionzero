@@ -8,6 +8,7 @@ import argparse
 import json
 import logging
 import os
+import re
 import sys
 import time
 from collections.abc import Sequence
@@ -19,7 +20,7 @@ from fromversionzero.config import VideoConfig, config_json_schema
 
 logger = logging.getLogger("fromversionzero")
 
-COMMANDS = ("render", "validate", "list", "schema", "mark")
+COMMANDS = ("render", "preview", "validate", "list", "schema", "mark")
 DATA_ROOT_ENV = "FVZ_DATA_ROOT"
 CONFIG_ENV = "FVZ_CONFIG"
 
@@ -112,18 +113,15 @@ def _render_overrides(args: argparse.Namespace) -> dict[str, Any]:
     overrides: dict[str, Any] = {}
     if args.shorts:
         overrides["shorts"] = True
-    if args.resolution:
-        overrides["resolution"] = args.resolution
-    if args.output_folder:
+    if getattr(args, "output_folder", None):
         overrides["output_folder"] = os.path.abspath(args.output_folder)
     if args.no_speculation:
         overrides["speculation"] = False
     return overrides
 
 
-def cmd_render(args: argparse.Namespace) -> int:
-    from fromversionzero.video_pipeline import VideoPipeline
-
+def _resolve_render(args: argparse.Namespace) -> tuple[Path, Path | None, VideoConfig]:
+    """Dataset folder, project config path and final config of a render/preview."""
     config_path = resolve_config_path(args.config)
     data_root = resolve_data_root(args.data_root)
     product = args.product
@@ -133,9 +131,25 @@ def cmd_render(args: argparse.Namespace) -> int:
         raise CliError("No product specified. Pass --product or set 'product_name' in video.json.")
 
     dataset_dir = find_dataset(product, data_root)
-    config = load_product_config(dataset_dir, config_path, _render_overrides(args))
+    overrides = _render_overrides(args)
+    config = load_product_config(dataset_dir, config_path, overrides)
+    if args.resolution:
+        # --resolution sets the size of the format being rendered: Shorts take
+        # theirs from shorts_overrides, which would otherwise ignore the flag.
+        if config.shorts:
+            overrides["shorts_overrides"] = {"resolution": args.resolution}
+        else:
+            overrides["resolution"] = args.resolution
+        config = load_product_config(dataset_dir, config_path, overrides)
     if not config.product_name:
         config = config.replace(product_name=dataset_dir.name)
+    return dataset_dir, config_path, config
+
+
+def cmd_render(args: argparse.Namespace) -> int:
+    from fromversionzero.video_pipeline import VideoPipeline
+
+    dataset_dir, config_path, config = _resolve_render(args)
 
     print(f"FromVersionZero {__version__}")
     print(f"  dataset     {dataset_dir}")
@@ -144,8 +158,23 @@ def cmd_render(args: argparse.Namespace) -> int:
     print(f"  theme       {config.theme}")
 
     start = time.perf_counter()
-    output = VideoPipeline(config, str(dataset_dir)).generate_video()
+    pipeline = VideoPipeline(config, str(dataset_dir), max_workers=args.workers)
+    output = pipeline.generate_video()
     print(f"Done in {time.perf_counter() - start:.1f}s -> {output}")
+    return 0
+
+
+def cmd_preview(args: argparse.Namespace) -> int:
+    """Renders one frame of the video to a PNG (seconds instead of a full render)."""
+    from fromversionzero.video_pipeline import VideoPipeline
+
+    dataset_dir, _, config = _resolve_render(args)
+    pipeline = VideoPipeline(config, str(dataset_dir))
+    image, t, total = pipeline.render_still(args.time)
+    output = Path(args.output or f"{config.product_name}_preview.png")
+    output.parent.mkdir(parents=True, exist_ok=True)
+    image.save(output)
+    print(f"Frame at {t:.2f}s of {total:.2f}s -> {output}")
     return 0
 
 
@@ -225,16 +254,25 @@ def cmd_mark(args: argparse.Namespace) -> int:
     from fromversionzero.marks import stylize
     from fromversionzero.media import MediaCache, is_url
 
+    if not 16 <= args.size <= 4096:
+        raise CliError("--size must be between 16 and 4096 pixels.")
+    line = args.line_color
+    if line is not None and not re.fullmatch(r"#[0-9A-Fa-f]{6}", line):
+        raise CliError("--line-color must be a #RRGGBB colour.")
     if is_url(args.source):
         mark = MediaCache().mark(
-            args.source, levels=args.levels, invert=args.invert, size=args.size
+            args.source, levels=args.levels, invert=args.invert, size=args.size, line=line
         )
         if mark is None:
             raise CliError(f"Could not download or read {args.source}.")
     else:
-        mark = stylize(
-            Image.open(args.source), size=args.size, levels=args.levels, invert=args.invert
-        )
+        try:
+            with Image.open(args.source) as source:
+                mark = stylize(
+                    source, size=args.size, levels=args.levels, invert=args.invert, line=line
+                )
+        except OSError as e:
+            raise CliError(f"Could not read image '{args.source}': {e}") from None
     Path(args.output).parent.mkdir(parents=True, exist_ok=True)
     mark.save(args.output, optimize=True)
     print(f"Mark written to {args.output}")
@@ -245,7 +283,10 @@ def cmd_list(args: argparse.Namespace) -> int:
     data_root = resolve_data_root(args.data_root)
     if data_root is None:
         raise CliError(f"No data root found. Pass --data-root or set ${DATA_ROOT_ENV}.")
-    for dataset_dir in iter_datasets(data_root):
+    datasets = iter_datasets(data_root)
+    if not datasets:
+        raise CliError(f"No datasets found under {data_root}.")
+    for dataset_dir in datasets:
         print(dataset_dir.relative_to(data_root).as_posix())
     return 0
 
@@ -253,6 +294,7 @@ def cmd_list(args: argparse.Namespace) -> int:
 def cmd_schema(args: argparse.Namespace) -> int:
     text = json.dumps(config_json_schema(), indent=2, ensure_ascii=False) + "\n"
     if args.output:
+        Path(args.output).parent.mkdir(parents=True, exist_ok=True)
         Path(args.output).write_text(text, encoding="utf-8")
         print(f"Schema written to {args.output}")
     else:
@@ -274,6 +316,26 @@ def _add_common(parser: argparse.ArgumentParser) -> None:
     )
 
 
+def _positive_int(value: str) -> int:
+    number = int(value)
+    if number < 1:
+        raise argparse.ArgumentTypeError("must be 1 or more")
+    return number
+
+
+def _add_render_options(parser: argparse.ArgumentParser) -> None:
+    _add_common(parser)
+    parser.add_argument("--product", "-p", help="Dataset name, Category/Name, or directory path.")
+    parser.add_argument("--shorts", action="store_true", help="Portrait Shorts output.")
+    parser.add_argument(
+        "--resolution",
+        help="Size of the rendered format (e.g. 720p, 1920x1080; 1080x1920 with --shorts).",
+    )
+    parser.add_argument(
+        "--no-speculation", action="store_true", help="Skip speculated generations."
+    )
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="fromversionzero",
@@ -286,15 +348,27 @@ def build_parser() -> argparse.ArgumentParser:
     common.add_argument("-v", "--verbose", action="store_true", help="Show debug logging.")
 
     render = sub.add_parser("render", parents=[common], help="Render a video (default command).")
-    _add_common(render)
-    render.add_argument("--product", "-p", help="Dataset name, Category/Name, or directory path.")
-    render.add_argument("--shorts", action="store_true", help="Portrait Shorts output.")
-    render.add_argument("--resolution", help="Override resolution (e.g. 720p, 1920x1080).")
+    _add_render_options(render)
     render.add_argument("--output-folder", help="Write the MP4 here instead of the dataset.")
     render.add_argument(
-        "--no-speculation", action="store_true", help="Skip speculated generations."
+        "--workers",
+        type=_positive_int,
+        help="Render processes (default: one per CPU core, at most 32).",
     )
     render.set_defaults(func=cmd_render)
+
+    preview = sub.add_parser(
+        "preview", parents=[common], help="Render a single frame to a PNG, to check the look."
+    )
+    _add_render_options(preview)
+    preview.add_argument(
+        "--time",
+        "-t",
+        type=float,
+        help="Moment to draw, in seconds (default: the full timeline, before the outro).",
+    )
+    preview.add_argument("--output", "-o", help="PNG path (default: ./<product>_preview.png).")
+    preview.set_defaults(func=cmd_preview)
 
     validate = sub.add_parser(
         "validate", parents=[common], help="Validate one dataset or every dataset."
@@ -318,9 +392,18 @@ def build_parser() -> argparse.ArgumentParser:
     mark.add_argument("output", help="Output PNG path.")
     mark.add_argument("--size", type=int, default=512, help="Longest side in pixels.")
     mark.add_argument(
-        "--levels", type=int, default=3, help="Tone bands: 3 for logos, 2 for photos."
+        "--levels",
+        type=int,
+        default=3,
+        choices=range(2, 6),
+        help="Tone bands, 2-5: 3 for logos, 2 for photos.",
     )
     mark.add_argument("--invert", action="store_true", help="Invert tones before banding.")
+    mark.add_argument(
+        "--line-color",
+        metavar="#RRGGBB",
+        help="Draw every line in this colour (default: the colours of the source).",
+    )
     mark.set_defaults(func=cmd_mark)
 
     list_cmd = sub.add_parser("list", parents=[common], help="List datasets under the data root.")
@@ -353,6 +436,15 @@ def main(argv: Sequence[str] | None = None) -> None:
         code = args.func(args)
     except CliError as e:
         print(f"Error: {e}", file=sys.stderr)
+        code = 1
+    except (ValueError, OSError, RuntimeError) as e:
+        # Bad datasets, unreadable files and FFmpeg failures are user-facing
+        # problems: one readable message, the traceback only with --verbose.
+        if args.verbose:
+            logger.exception("Command failed")
+        print(f"Error: {e}", file=sys.stderr)
+        if not args.verbose:
+            print("(run again with --verbose for the full traceback)", file=sys.stderr)
         code = 1
     except KeyboardInterrupt:
         print("Interrupted.", file=sys.stderr)

@@ -13,6 +13,7 @@ from PIL import Image, ImageDraw
 from PIL.ImageFont import FreeTypeFont
 
 from fromversionzero.data_loader import ProductDataPoint
+from fromversionzero.drawing import wrap_text
 
 if TYPE_CHECKING:
     from fromversionzero.renderer import Renderer
@@ -266,8 +267,6 @@ def draw_facts_card(
     alpha: float,
 ) -> None:
     """Framed card with a label and the generation's fact bullets."""
-    from fromversionzero.renderer import wrap_text
-
     u = r.unit
     x, y, w, h = box
     if point is None or not point.fact or alpha <= 0.0:

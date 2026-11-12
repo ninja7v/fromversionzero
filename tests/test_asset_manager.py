@@ -21,7 +21,7 @@ def ink_width(font_name: str) -> int:
 
 
 def test_font_names_select_real_weights_of_the_variable_font() -> None:
-    """Regression: all roles used to render Montserrat Thin (the variable default)."""
+    """Each font name selects its own weight, not the variable font's default (Thin)."""
     thin, regular, bold = (ink_width(f"Montserrat-{w}") for w in ("Thin", "Regular", "Bold"))
     assert thin < regular < bold
 

@@ -5,9 +5,9 @@
 """Stylizes third-party media into FromVersionZero line art.
 
 Luminance is posterized into a few bands, the borders between bands become
-thin neon contour lines with a soft glow, and the darkest band gets a halftone
-dot fill. Colour, texture, typography and fine detail of the source are
-discarded; only the overall silhouette stays recognisable.
+thin contour lines with a soft glow, and the darkest band gets a halftone
+dot fill. The lines take the colours of the source where they run (or one fixed
+colour); texture, typography and fine detail are discarded.
 """
 
 from __future__ import annotations
@@ -16,7 +16,6 @@ import numpy as np
 from PIL import Image, ImageChops, ImageFilter
 
 # "signal" theme palette from the generator (themes.py).
-LINE = "#38E8FF"
 FILL = "#D6FF3F"
 SUPERSAMPLE = 3
 
@@ -99,20 +98,49 @@ def _halftone(shape: tuple[int, int], region: np.ndarray, pitch: int) -> np.ndar
     return dots & region
 
 
+def _spread(rgb: np.ndarray, weight: Image.Image, radius: float) -> tuple[np.ndarray, np.ndarray]:
+    """Weighted blur of ``rgb``: the mean colour of nearby weighted pixels, and their weight."""
+    blur = ImageFilter.GaussianBlur(radius)
+    share = np.asarray(weight, dtype=np.float32)[..., None] / 255.0
+    spread = np.asarray(Image.fromarray((rgb * share).astype(np.uint8)).filter(blur), np.float32)
+    total = np.asarray(weight.filter(blur), dtype=np.float32)[..., None]
+    return spread / np.maximum(total, 1.0) * 255.0, total
+
+
+def _source_colors(src: Image.Image, radius: float) -> Image.Image:
+    """The subject's own colours, spread past its outline so a contour drawn on
+    the edge is not washed out by the background colour."""
+    rgb = np.asarray(src.convert("RGB"), dtype=np.float32)
+    subject = Image.fromarray((_foreground(src) > 0.99).astype(np.uint8) * 255)
+    # The antialiased rim is already mixed with the background: prefer the
+    # inside of each shape, and fall back to the rim for strokes too thin to have one.
+    inside = subject.filter(ImageFilter.MinFilter(2 * SUPERSAMPLE + 1))
+    colors = rgb
+    for weight in (subject, inside):
+        mean, total = _spread(rgb, weight, radius)
+        colors = np.where(total > 8.0, mean, colors)
+    return Image.fromarray(np.clip(colors, 0, 255).astype(np.uint8)).convert("RGBA")
+
+
 def stylize(
     source: Image.Image,
     size: int = 512,
     levels: int = 3,
-    line: str = LINE,
+    line: str | None = None,
     fill: str = FILL,
     dots: bool = True,
     invert: bool = False,
 ) -> Image.Image:
-    """Returns an RGBA mark fitted in a ``size`` x ``size`` box (aspect kept)."""
+    """Returns an RGBA mark fitted in a ``size`` x ``size`` box (aspect kept).
+
+    Lines are drawn in the source's colours, or in ``line`` (``#RRGGBB``) when given.
+    """
     src = source.convert("RGBA")
     src.thumbnail((size, size), Image.Resampling.LANCZOS)
-    work = src.resize((src.width * SUPERSAMPLE, src.height * SUPERSAMPLE), Image.Resampling.LANCZOS)
-    work = work.filter(ImageFilter.GaussianBlur(SUPERSAMPLE * 1.2))
+    sharp = src.resize(
+        (src.width * SUPERSAMPLE, src.height * SUPERSAMPLE), Image.Resampling.LANCZOS
+    )
+    work = sharp.filter(ImageFilter.GaussianBlur(SUPERSAMPLE * 1.2))
 
     mask = _foreground(work)
     labels = _bands(work, mask, levels, invert)
@@ -131,7 +159,11 @@ def stylize(
         canvas = Image.composite(
             Image.new("RGBA", work.size, (*_rgb(fill), 255)), canvas, dot_alpha
         )
-    canvas = Image.composite(Image.new("RGBA", work.size, (*_rgb(line), 255)), canvas, line_alpha)
+    if line is None:
+        ink = _source_colors(sharp, radius=stroke + SUPERSAMPLE * 2)
+    else:
+        ink = Image.new("RGBA", work.size, (*_rgb(line), 255))
+    canvas = Image.composite(ink, canvas, line_alpha)
 
     out = canvas.resize(src.size, Image.Resampling.LANCZOS)
     bbox = out.getbbox()

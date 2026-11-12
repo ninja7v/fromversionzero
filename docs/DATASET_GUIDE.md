@@ -39,13 +39,13 @@ One row per product generation. The first row is the header. The following colum
 
 | Column | Required | Type | Description |
 | --- | --- | --- | --- |
-| `name` | yes | str | Display name of the generation. |
-| `date` | yes | `YYYY.MM` | X axis value (e.g. `2018.11`), converted to a fractional year. A `year` column with `YYYY` values is also accepted. |
+| `name` | yes | str | Display name of the generation. The `name`, `image`, `fact`, `sfx` and `speculation` headers are matched ignoring case. |
+| `date` | yes | `YYYY.MM` | X axis value (e.g. `2018.11`), converted to a fractional year. Write the month with two digits: `2018.1` is read as January (with a warning), not October. A `year` column with `YYYY` values is also accepted. |
 | `<any numeric metric>` | one or more | number | Plotted as its own curve, as a multiple of its first value. Leading cells may be blank (the curve starts at the first generation that has a value). A blank between two values is interpolated linearly along the X axis and labelled `≈` in the video. The last row must have a value. Commas and `$` are stripped. Select and order curves with `metrics` in `config.json`. |
 | `image` | optional | str | Filename inside `images/`, or an `http(s)` URL that is downloaded and redrawn as line art at render time (see *Linked media*). |
 | `fact` | optional | str | Short milestone text shown in the fact card; `;` splits it into bullets. A leading `Speculation:` becomes the card's label. |
-| `sfx` | optional | str | Sound effect filename played at this node's reveal. |
-| `speculation` | optional | `true`/`false` | If `true`, the row is treated as a speculated next generation and rendered in the speculation phase. |
+| `sfx` | optional | str | Sound effect file (relative to the dataset folder) played at this node's reveal. A missing file is a warning and is skipped. |
+| `speculation` | optional | `true`/`false` | If `true`, the row is treated as a speculated next generation and rendered in the speculation phase. Speculation rows must be dated after every released row. |
 
 ### `config.json`
 
@@ -55,7 +55,8 @@ The loader validates every row before rendering. It requires at least one real
 (non-speculation) row and one numeric metric with a value on a released row
 and on the last row. Columns
 that contain only text are treated as metadata and are not plotted. A column
-that mixes numeric and nonnumeric values is rejected.
+that mixes numeric and nonnumeric values is rejected. So are duplicate or
+unnamed columns and rows with more or fewer cells than the header.
 
 ### What a value means
 
@@ -76,14 +77,19 @@ standards linked above, not here.
 A dataset can link its logo and generation images instead of shipping them:
 `media.logo` in `config.json` and URLs in the `image` column of `data.csv`.
 At render time each link is downloaded once, redrawn as FromVersionZero line
-art (tone contours and a halftone fill, see `fromversionzero.marks`) and cached
+art (tone contours in the media's own colours and a halftone fill, see
+`fromversionzero.marks`) and cached
 in `~/.cache/fromversionzero/media` (override with `$FVZ_MEDIA_CACHE`), so later
 renders work offline. A link that cannot be downloaded or read falls back to the
 typographic placeholder with a warning.
 
-- Preview a link: `fromversionzero mark <url-or-file> preview.png [--levels 2]`.
+- Links must point to public `http(s)` hosts. Private, loopback and link-local
+  addresses are refused, because a dataset written by someone else could
+  otherwise make the renderer query your local network. Set
+  `FVZ_ALLOW_PRIVATE_MEDIA=1` to allow them (for a media server of your own).
+- Preview a link: `fromversionzero mark <url-or-file> preview.png [--levels 2] [--line-color #RRGGBB]`.
 - Check every link: `fromversionzero validate --check-media`.
-- SVG, PNG, JPEG and WebP are supported; files over 20 MB are skipped.
+- SVG, PNG, JPEG and WebP are supported; files over 20 MB or 64 megapixels are skipped.
 
 ### Zeros and the log axis
 
@@ -135,6 +141,7 @@ Check it, then render:
 
 ```bash
 fromversionzero validate --product MyProduct --strict   # errors + data warnings
+fromversionzero preview --product MyProduct -o look.png   # one frame, in a second
 fromversionzero render --product MyProduct --resolution 480p
 ```
 

@@ -48,7 +48,7 @@ to `config.json` or `data.csv` semantics bump `SCHEMA_VERSION`.
   lizard limits (CCN ≤ 15, ≤ 120 lines).
 - Keep rendering pure: `Renderer.render(FrameState)` must not depend on
   previous frames (tests check parallel == sequential output).
-- Update `CHANGELOG.md` under "Unreleased".
+- Update `CHANGELOG.md`: add an "Unreleased" section above the latest version.
 - Datasets are contributed to
   [fromversionzero-data](https://github.com/ninja7v/fromversionzero-data),
   which defines the data format. The generator follows it: a dataset that

@@ -96,3 +96,68 @@ def test_render_errors_are_reported_without_traceback(
     assert "No product specified" in capsys.readouterr().err
     assert run(["--product", "Widget", "--data-root", str(tmp_path / "missing")]) == 1
     assert "Data root is not a directory" in capsys.readouterr().err
+
+
+def test_dataset_errors_during_render_have_no_traceback(
+    widget_dir: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    csv = (widget_dir / "data.csv").read_text(encoding="utf-8")
+    (widget_dir / "data.csv").write_text(csv.replace(",180,", ",abc,"), encoding="utf-8")
+    assert run(["render", "--product", str(widget_dir)]) == 1
+    err = capsys.readouterr().err
+    assert "Error: Row 2" in err and "non-numeric metric" in err
+    assert "Traceback" not in err and "--verbose" in err
+
+
+def test_invalid_project_config_is_reported_without_traceback(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    config = tmp_path / "video.json"
+    config.write_text('{"fps": "fast"}', encoding="utf-8")
+    assert run(["render", "--config", str(config)]) == 1
+    err = capsys.readouterr().err
+    assert "Invalid configuration" in err and "fps" in err and "Traceback" not in err
+
+
+def test_resolution_flag_applies_to_shorts(
+    widget_dir: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = tmp_path / "video.json"
+    fast_shorts = {k: v for k, v in FAST.items() if k.endswith("_duration") and k != "fps"}
+    fast_shorts["reveal_duration"] = 0.5
+    config.write_text(json.dumps({**FAST, "shorts_overrides": fast_shorts}), encoding="utf-8")
+    out = tmp_path / "out"
+    args = ["--product", str(widget_dir), "--config", str(config), "--output-folder", str(out)]
+    assert run([*args, "--shorts", "--resolution", "180x320", "--workers", "1"]) == 0
+    assert (out / "Widget_portrait_180x320.mp4").stat().st_size > 0
+    # A portrait size without --shorts is a configuration error, not a broken layout.
+    assert run([*args, "--resolution", "180x320"]) == 1
+
+
+def test_preview_writes_a_single_frame(
+    widget_dir: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from PIL import Image
+
+    config = tmp_path / "video.json"
+    config.write_text(json.dumps(FAST), encoding="utf-8")
+    target = tmp_path / "frames" / "still.png"
+    args = ["preview", "--product", str(widget_dir), "--config", str(config), "-o", str(target)]
+    assert run(args) == 0
+    assert Image.open(target).size == (426, 240)
+    assert "Frame at" in capsys.readouterr().out
+    assert run([*args, "--shorts", "--resolution", "180x320", "--time", "0.5"]) == 0
+    assert Image.open(target).size == (180, 320)
+
+
+def test_mark_rejects_bad_arguments(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    assert run(["mark", str(tmp_path / "missing.png"), str(tmp_path / "o.png")]) == 1
+    assert "Could not read image" in capsys.readouterr().err
+    assert run(["mark", "a.png", "o.png", "--size", "0"]) == 1
+    assert run(["mark", "a.png", "o.png", "--levels", "7"]) == 2
+
+
+def test_schema_and_list_edge_cases(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    assert run(["schema", "-o", str(tmp_path / "new" / "dir" / "schema.json")]) == 0
+    assert run(["list", "--data-root", str(tmp_path)]) == 1
+    assert "No datasets found" in capsys.readouterr().err

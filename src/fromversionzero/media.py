@@ -18,14 +18,20 @@ Cache layout (default ``~/.cache/fromversionzero/media``)::
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import io
+import ipaddress
 import logging
 import os
 import re
+import socket
+import tempfile
 import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
+from typing import Any
 
 from PIL import Image
 
@@ -35,7 +41,11 @@ from fromversionzero.marks import stylize
 logger = logging.getLogger(__name__)
 
 CACHE_ENV = "FVZ_MEDIA_CACHE"
+#: Set to ``1`` to allow links to private, loopback or link-local addresses.
+ALLOW_PRIVATE_ENV = "FVZ_ALLOW_PRIVATE_MEDIA"
 MAX_BYTES = 20 * 1024 * 1024
+#: Decoded size limit: a small file can expand to a huge bitmap.
+MAX_PIXELS = 64_000_000
 TIMEOUT = 30
 USER_AGENT = f"FromVersionZero/{__version__} (+https://github.com/ninja7v/fromversionzero)"
 
@@ -49,6 +59,68 @@ def default_cache_dir() -> Path:
         return Path(os.environ[CACHE_ENV])
     base = os.environ.get("XDG_CACHE_HOME") or os.path.join(Path.home(), ".cache")
     return Path(base) / "fromversionzero" / "media"
+
+
+def check_public_url(url: str) -> None:
+    """Raises ``ValueError`` unless ``url`` is http(s) and its host is a public address.
+
+    Links come with datasets written by other people. Without this check a
+    dataset could make the renderer request services on the local machine or
+    network (``http://localhost:...``, cloud metadata addresses). The host is
+    resolved here and again by the HTTP client, so a DNS server that changes
+    its answer between the two can still get through; this is a guard against
+    plain mistakes and simple abuse, not a sandbox.
+    """
+    parts = urllib.parse.urlsplit(url)
+    if parts.scheme not in ("http", "https") or not parts.hostname:
+        raise ValueError("only http(s) links are allowed")
+    if os.environ.get(ALLOW_PRIVATE_ENV) == "1":
+        return
+    try:
+        infos = socket.getaddrinfo(parts.hostname, parts.port or 0, type=socket.SOCK_STREAM)
+    except OSError as e:
+        raise ValueError(f"cannot resolve host '{parts.hostname}' ({e})") from None
+    for info in infos:
+        address = ipaddress.ip_address(str(info[4][0]).split("%")[0])
+        if not address.is_global:
+            raise ValueError(
+                f"host '{parts.hostname}' is a private or local address "
+                f"(set {ALLOW_PRIVATE_ENV}=1 to allow it)"
+            )
+
+
+class _CheckedRedirects(urllib.request.HTTPRedirectHandler):
+    """Applies :func:`check_public_url` to every redirect target."""
+
+    def redirect_request(
+        self, req: Any, fp: Any, code: int, msg: str, headers: Any, newurl: str
+    ) -> urllib.request.Request | None:
+        try:
+            check_public_url(newurl)
+        except ValueError as e:
+            raise urllib.error.URLError(f"redirect refused: {e}") from None
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
+def _open(request: urllib.request.Request, timeout: float) -> Any:
+    """Opens ``request`` after checking its host (tests replace this function)."""
+    check_public_url(request.full_url)
+    return urllib.request.build_opener(_CheckedRedirects).open(request, timeout=timeout)
+
+
+def _write_atomic(path: Path, data: bytes) -> None:
+    """Writes through a uniquely named temp file, so concurrent renders that
+    fill the same cache never see or clobber each other's partial files."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=path.parent, suffix=".tmp")
+    try:
+        with os.fdopen(fd, "wb") as file:
+            file.write(data)
+        os.replace(tmp, path)
+    except BaseException:
+        with contextlib.suppress(OSError):
+            os.remove(tmp)
+        raise
 
 
 def _digest(text: str) -> str:
@@ -92,14 +164,24 @@ def _decode(data: bytes, url: str, size: int) -> Image.Image:
     head = data[:512].lstrip().lower()
     if url.lower().split("?")[0].endswith(".svg") or head.startswith((b"<svg", b"<?xml")):
         return render_svg(data, size * 2)
-    return Image.open(io.BytesIO(data)).convert("RGBA")
+    image = Image.open(io.BytesIO(data))
+    if image.width * image.height > MAX_PIXELS:
+        raise ValueError(f"image is too large ({image.width}x{image.height} pixels)")
+    return image.convert("RGBA")
 
 
 class MediaCache:
     """Fetches URLs once and keeps the raw bytes and stylized marks on disk."""
 
-    def __init__(self, cache_dir: str | os.PathLike[str] | None = None) -> None:
+    def __init__(
+        self, cache_dir: str | os.PathLike[str] | None = None, offline: bool = False
+    ) -> None:
         self.cache_dir = Path(cache_dir) if cache_dir else default_cache_dir()
+        #: Never touch the network: only files already in the cache are used.
+        #: Render workers run offline after the pipeline has prefetched every
+        #: link once, so a broken link is not retried by each worker and every
+        #: frame sees the same media.
+        self.offline = offline
         self.failed: dict[str, str] = {}
 
     def fetch(self, url: str) -> bytes | None:
@@ -109,9 +191,12 @@ class MediaCache:
             return path.read_bytes()
         if url in self.failed:
             return None
+        if self.offline:
+            self.failed[url] = "not in the media cache"
+            return None
         try:
             request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
-            with urllib.request.urlopen(request, timeout=TIMEOUT) as response:
+            with _open(request, TIMEOUT) as response:
                 data = response.read(MAX_BYTES + 1)
         except (urllib.error.URLError, OSError, ValueError) as e:
             self.failed[url] = str(e)
@@ -121,10 +206,10 @@ class MediaCache:
             self.failed[url] = "file larger than 20 MB"
             logger.warning(f"Skipping {url}: file larger than 20 MB")
             return None
-        self.cache_dir.mkdir(parents=True, exist_ok=True)
-        tmp = path.with_suffix(".tmp")
-        tmp.write_bytes(data)
-        tmp.replace(path)
+        try:
+            _write_atomic(path, data)
+        except OSError as e:  # read-only or full cache: still usable for this run
+            logger.warning(f"Could not cache {url}: {e}")
         return data
 
     def mark(
@@ -135,9 +220,10 @@ class MediaCache:
         invert: bool = False,
         stylized: bool = True,
         size: int = 512,
+        line: str | None = None,
     ) -> Image.Image | None:
         """The FromVersionZero mark of ``url`` (or the plain image when ``stylized`` is False)."""
-        key = f"{url}|{levels}|{invert}|{stylized}|{size}"
+        key = f"{url}|{levels}|{invert}|{stylized}|{size}|{line or 'source'}"
         path = self.cache_dir / f"{_digest(key)}.png"
         if path.is_file():
             try:
@@ -149,13 +235,19 @@ class MediaCache:
             return None
         try:
             source = _decode(data, url, size)
-            image = stylize(source, size=size, levels=levels, invert=invert) if stylized else source
+            image = (
+                stylize(source, size=size, levels=levels, invert=invert, line=line)
+                if stylized
+                else source
+            )
         except Exception as e:  # noqa: BLE001 - any decoding/stylizing problem falls back
             self.failed[url] = f"unreadable image ({e})"
             logger.warning(f"Could not read the image at {url}: {e}")
             return None
-        self.cache_dir.mkdir(parents=True, exist_ok=True)
-        tmp = path.with_suffix(".tmp.png")
-        image.save(tmp)
-        tmp.replace(path)
+        try:
+            buffer = io.BytesIO()
+            image.save(buffer, "PNG")
+            _write_atomic(path, buffer.getvalue())
+        except OSError as e:
+            logger.warning(f"Could not cache the mark of {url}: {e}")
         return image

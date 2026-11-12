@@ -32,7 +32,7 @@ def png_bytes() -> bytes:
 
 
 class FakeWeb:
-    """Stands in for urllib.request.urlopen; counts requests per URL."""
+    """Stands in for media._open; counts requests per URL."""
 
     def __init__(self, pages: dict[str, bytes]) -> None:
         self.pages = pages
@@ -51,21 +51,41 @@ def web(monkeypatch: pytest.MonkeyPatch) -> FakeWeb:
     fake = FakeWeb(
         {"https://example.org/logo.png": png_bytes(), "https://example.org/logo.svg": SVG}
     )
-    monkeypatch.setattr(media.urllib.request, "urlopen", fake)
+    monkeypatch.setattr(media, "_open", fake)
     return fake
 
 
-def test_stylize_keeps_the_silhouette_and_drops_colour() -> None:
-    source = Image.open(io.BytesIO(png_bytes()))
-    mark = stylize(source, size=128)
-    assert mark.mode == "RGBA" and max(mark.size) <= 128
-    alpha = mark.getchannel("A")
-    assert alpha.getbbox() is not None
-    # The source's blue does not survive: only the line/fill palette is drawn.
+def _line_pixels(mark: Image.Image) -> np.ndarray:
     pixels = np.asarray(mark)
     opaque = pixels[pixels[..., 3] > 200][:, :3].astype(int)
     assert len(opaque) > 0
-    assert not ((abs(opaque - (30, 30, 200)) < 40).all(axis=1)).any()
+    return opaque
+
+
+def test_stylize_keeps_the_silhouette_and_the_source_colours() -> None:
+    source = Image.open(io.BytesIO(png_bytes()))
+    mark = stylize(source, size=128, dots=False)
+    assert mark.mode == "RGBA" and max(mark.size) <= 128
+    # The lines are drawn in the source's blue, not washed out by its background.
+    assert (abs(_line_pixels(mark) - (30, 30, 200)) < 40).all()
+
+
+def test_stylize_with_a_fixed_line_colour() -> None:
+    source = Image.open(io.BytesIO(png_bytes()))
+    mark = stylize(source, size=128, dots=False, line="#38E8FF")
+    assert (abs(_line_pixels(mark) - (0x38, 0xE8, 0xFF)) < 30).all()
+
+
+def test_line_colour_setting_and_cache_key(tmp_path: Path, web: FakeWeb) -> None:
+    assert VideoConfig.from_dict({}).media.line is None
+    assert VideoConfig.from_dict({"media": {"line_color": "#38E8FF"}}).media.line == "#38E8FF"
+    with pytest.raises(ValueError, match="line_color"):
+        VideoConfig.from_dict({"media": {"line_color": "blue"}})
+    cache, url = MediaCache(tmp_path), "https://example.org/logo.png"
+    own = cache.mark(url, levels=3)
+    fixed = cache.mark(url, levels=3, line="#38E8FF")
+    assert own is not None and fixed is not None
+    assert own.tobytes() != fixed.tobytes()
 
 
 def test_is_url() -> None:
@@ -96,7 +116,7 @@ def test_svg_internal_entities_are_inlined(tmp_path: Path, monkeypatch: pytest.M
         b'<svg xmlns="&ns_svg;" width="100" height="100"><rect x="10" y="10" width="80"'
         b' height="80" fill="#222"/></svg>'
     )
-    monkeypatch.setattr(media.urllib.request, "urlopen", FakeWeb({"https://e.org/a.svg": svg}))
+    monkeypatch.setattr(media, "_open", FakeWeb({"https://e.org/a.svg": svg}))
     assert MediaCache(tmp_path).mark("https://e.org/a.svg", levels=3, size=128) is not None
 
 
@@ -114,9 +134,7 @@ def test_broken_links_fail_softly(tmp_path: Path, web: FakeWeb) -> None:
 
 
 def test_unreadable_downloads_fail_softly(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(
-        media.urllib.request, "urlopen", FakeWeb({"https://example.org/x.png": b"not an image"})
-    )
+    monkeypatch.setattr(media, "_open", FakeWeb({"https://example.org/x.png": b"not an image"}))
     cache = MediaCache(tmp_path)
     assert cache.mark("https://example.org/x.png", levels=3) is None
     assert "unreadable" in cache.failed["https://example.org/x.png"]
@@ -124,9 +142,7 @@ def test_unreadable_downloads_fail_softly(tmp_path: Path, monkeypatch: pytest.Mo
 
 def test_oversized_downloads_are_skipped(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(media, "MAX_BYTES", 10)
-    monkeypatch.setattr(
-        media.urllib.request, "urlopen", FakeWeb({"https://example.org/big.png": png_bytes()})
-    )
+    monkeypatch.setattr(media, "_open", FakeWeb({"https://example.org/big.png": png_bytes()}))
     assert MediaCache(tmp_path).fetch("https://example.org/big.png") is None
 
 
@@ -219,3 +235,66 @@ def test_svg_with_physical_units_is_rasterized(unit: str) -> None:
     assert image.width == 200
     assert abs(image.height - 100) <= 2  # intrinsic size is rounded to whole pixels
     assert image.getchannel("A").getbbox() is not None
+
+
+# ----------------------------------------------------------------------
+# Links are untrusted input
+# ----------------------------------------------------------------------
+@pytest.mark.parametrize(
+    "url",
+    [
+        "http://127.0.0.1:8080/logo.png",
+        "http://localhost/logo.png",
+        "http://169.254.169.254/latest/meta-data/",
+        "http://[::1]/logo.png",
+        "http://10.0.0.5/logo.png",
+        "ftp://example.org/logo.png",
+        "file:///etc/passwd",
+    ],
+)
+def test_private_and_non_http_links_are_refused(
+    url: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv(media.ALLOW_PRIVATE_ENV, raising=False)
+    with pytest.raises(ValueError):
+        media.check_public_url(url)
+    if is_url(url):
+        cache = MediaCache(tmp_path)
+        assert cache.fetch(url) is None and url in cache.failed
+        assert not list(tmp_path.glob("*.src"))
+
+
+def test_private_links_can_be_allowed_explicitly(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv(media.ALLOW_PRIVATE_ENV, "1")
+    media.check_public_url("http://127.0.0.1:8080/logo.png")
+
+
+def test_redirects_to_private_addresses_are_refused(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv(media.ALLOW_PRIVATE_ENV, raising=False)
+    handler = media._CheckedRedirects()
+    request = media.urllib.request.Request("https://example.org/a.png")
+    with pytest.raises(urllib.error.URLError, match="redirect refused"):
+        handler.redirect_request(request, None, 302, "Found", {}, "http://127.0.0.1/secret")
+
+
+def test_offline_cache_reads_cached_media_but_never_downloads(tmp_path: Path, web: FakeWeb) -> None:
+    url, other = "https://example.org/logo.png", "https://example.org/logo.svg"
+    assert MediaCache(tmp_path).mark(url, levels=3) is not None
+    offline = MediaCache(tmp_path, offline=True)
+    assert offline.mark(url, levels=3) is not None
+    assert offline.mark(other, levels=3) is None
+    assert web.calls == {url: 1}
+
+
+def test_cache_writes_leave_no_temporary_files(tmp_path: Path, web: FakeWeb) -> None:
+    assert MediaCache(tmp_path).mark("https://example.org/logo.png", levels=3) is not None
+    assert sorted(p.suffix for p in tmp_path.iterdir()) == [".png", ".src"]
+
+
+def test_images_with_too_many_pixels_are_refused(
+    tmp_path: Path, web: FakeWeb, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(media, "MAX_PIXELS", 100)
+    cache = MediaCache(tmp_path)
+    assert cache.mark("https://example.org/logo.png", levels=3) is None
+    assert "too large" in cache.failed["https://example.org/logo.png"]

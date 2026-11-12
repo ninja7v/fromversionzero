@@ -13,6 +13,7 @@ from collections.abc import Callable, Iterator, Sequence
 from concurrent.futures import Future, ProcessPoolExecutor
 
 import numpy as np
+from PIL import Image
 
 from fromversionzero.audio_handler import AudioHandler
 from fromversionzero.config import VideoConfig
@@ -33,7 +34,7 @@ _WORKER: dict[str, Renderer] = {}
 
 
 def _worker_init(config: VideoConfig, dataset: Dataset, dataset_dir: str) -> None:
-    _WORKER["renderer"] = Renderer(config, dataset, dataset_dir)
+    _WORKER["renderer"] = Renderer(config, dataset, dataset_dir, offline_media=True)
 
 
 def _worker_render(states: Sequence[FrameState]) -> list[np.ndarray]:
@@ -100,6 +101,8 @@ class VideoPipeline:
         self._prefetch_media(dataset)
         planner = TimelinePlanner(self.config, dataset, self.dataset_dir)
         frames = planner.plan()
+        if not frames:
+            raise ValueError("The timeline is empty: every duration is zero.")
         cues = planner.sfx_cues()
         timeline = planner.timeline
         self._log_summary(dataset, timeline)
@@ -121,6 +124,26 @@ class VideoPipeline:
         self.finalize_output(output_path, silent_path, timeline, cues)
         return output_path
 
+    def render_still(self, t: float | None = None) -> tuple[Image.Image, float, float]:
+        """One frame as an image: ``(image, time, total_duration)``.
+
+        ``t`` is clamped to the video; by default the frame is the end of the
+        hold, when every released generation is on screen.
+        """
+        dataset = self.load_dataset()
+        self._prefetch_media(dataset)
+        planner = TimelinePlanner(self.config, dataset, self.dataset_dir)
+        frames = planner.plan()
+        if not frames:
+            raise ValueError("The timeline is empty: every duration is zero.")
+        timeline = planner.timeline
+        if t is None:
+            t = timeline.hold_end - timeline.dt
+        index = max(0, min(len(frames) - 1, round(t * timeline.fps)))
+        renderer = Renderer(self.config, dataset, self.dataset_dir, offline_media=True)
+        frame = renderer.render(frames[index])
+        return Image.fromarray(frame), frames[index].t, timeline.total_duration
+
     def _prefetch_media(self, dataset: Dataset) -> None:
         """Downloads linked media once, before parallel workers start rendering."""
         from fromversionzero.asset_manager import AssetManager
@@ -133,7 +156,11 @@ class VideoPipeline:
             )
 
     def render_frames(self, frames: Sequence[FrameState], dataset: Dataset) -> Iterator[np.ndarray]:
-        """Yields rendered frames in order, in parallel when worthwhile."""
+        """Yields rendered frames in order, in parallel when worthwhile.
+
+        Linked media is read from the cache only; :meth:`generate_video`
+        downloads it first (see :meth:`_prefetch_media`).
+        """
         workers = self.max_workers or min(32, os.cpu_count() or 1)
         workers = min(workers, len(frames))
         if workers > 1 and len(frames) >= 4:
@@ -155,7 +182,7 @@ class VideoPipeline:
                     # On error (or early close) don't wait for queued frames.
                     pool.shutdown(wait=False, cancel_futures=True)
                 return
-        renderer = Renderer(self.config, dataset, self.dataset_dir)
+        renderer = Renderer(self.config, dataset, self.dataset_dir, offline_media=True)
         for state in frames:
             yield renderer.render(state)
 
