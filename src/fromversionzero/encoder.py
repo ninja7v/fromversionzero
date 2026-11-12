@@ -135,7 +135,8 @@ class FFmpegVideoWriter:
             )
         assert self._proc.stdin is not None
         try:
-            self._proc.stdin.write(np.ascontiguousarray(frame).tobytes())
+            # The buffer is written as is (no intermediate bytes copy).
+            self._proc.stdin.write(np.ascontiguousarray(frame).data)
         except OSError:
             # FFmpeg exited: BrokenPipeError on POSIX, OSError(EINVAL) on Windows.
             self._close_stdin()

@@ -17,8 +17,11 @@ from fromversionzero.asset_manager import text_logo
 from fromversionzero.components import (
     apply_alpha_to_image,
     draw_facts_card,
+    draw_generation_mark,
     draw_product_card,
 )
+from fromversionzero.drawing import blend_draw, wrap_text
+from fromversionzero.interpolator import ease_sigmoid
 
 if TYPE_CHECKING:
     from fromversionzero.renderer import Renderer
@@ -74,8 +77,6 @@ def draw_hud(
         point = r.data_points[last]
         prev = r.data_points[last - 1] if last > 0 else None
         alpha = min(1.0, state.revealed_pcts[last])
-        from fromversionzero.interpolator import ease_sigmoid
-
         draw_product_card(r, canvas, draw, point, prev, _box(r, PRODUCT_CARD), ease_sigmoid(alpha))
         if r.config.show_facts:
             fact_point = (
@@ -133,8 +134,15 @@ def product_logo(r: Renderer, box: int) -> Image.Image:
     logo = r.asset_manager.get_product_logo(box)
     if logo is not None:
         return logo
-    brand = os.path.basename(os.path.normpath(r.dataset_dir)).split("_")[0].upper()
-    return text_logo(brand, r.font("heading", 10), box, r.rgba("accent")[:3])
+    # Drawn once per size: this fallback is pasted on every frame.
+    cache = r.asset_manager.image_cache
+    key = f"__text_logo_{box}"
+    if cache.get(key) is None:
+        brand = os.path.basename(os.path.normpath(r.dataset_dir)).split("_")[0].upper()
+        cache[key] = text_logo(brand, r.font("heading", 10), box, r.rgba("accent")[:3])
+    fallback = cache[key]
+    assert fallback is not None
+    return fallback
 
 
 def draw_logos(r: Renderer, canvas: Image.Image, time_elapsed: float) -> None:
@@ -169,12 +177,6 @@ def _paste_centered(
     layer.paste(resized, (int(cx - width / 2), int(cy - height / 2)), resized)
 
 
-def blend_draw(canvas: Image.Image) -> ImageDraw.ImageDraw:
-    from fromversionzero.renderer import BlendDraw
-
-    return BlendDraw(canvas)
-
-
 def _hero_image(r: Renderer, index: int, size: int) -> Image.Image | None:
     """Product image of generation ``index`` or, failing that, the category icon."""
     point = r.data_points[index]
@@ -185,15 +187,11 @@ def _hero_image(r: Renderer, index: int, size: int) -> Image.Image | None:
 
 
 def _stage(progress: float, start: float, duration: float) -> float:
-    from fromversionzero.interpolator import ease_sigmoid
-
     return ease_sigmoid(max(0.0, min(1.0, (progress - start) / duration)))
 
 
 def draw_intro_overlay(r: Renderer, canvas: Image.Image, intro_progress: float) -> None:
     """Kinetic 'dossier' title card: kicker, title, key stats and the first product."""
-    from fromversionzero.renderer import wrap_text
-
     u = r.unit
     progress = max(0.0, min(1.0, intro_progress))
     visible = 1.0 - _stage(progress, 0.72, 0.28)
@@ -333,8 +331,6 @@ def draw_outro_overlay(r: Renderer, canvas: Image.Image, outro_progress: float) 
         if image is not None:
             _paste_centered(r, layer, image, x, image_y, 130 * u, image_in)
         else:
-            from fromversionzero.components import draw_generation_mark
-
             draw_generation_mark(r, draw, point, x, image_y, 120 * u, 90 * u, image_in)
         name = point.name.upper()[:26]
         width = draw.textlength(name, font=font_label)

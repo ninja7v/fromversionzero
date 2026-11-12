@@ -1,4 +1,4 @@
-# src/data_loader.py
+# src/fromversionzero/data_loader.py
 # MIT License - Copyright (c) 2026 Luc Prevost
 # Parses data.csv files into validated, chronologically sorted product data points.
 
@@ -7,9 +7,16 @@ import logging
 import math
 import os
 import re
-from typing import Any, ClassVar
+from dataclasses import dataclass, field
+from typing import ClassVar
 
 logger = logging.getLogger(__name__)
+
+_YEAR_MONTH = re.compile(r"^(\d{4})\.(\d{1,2})$")
+_TRUE = frozenset({"true", "yes", "1", "y", "t"})
+_FALSE = frozenset({"false", "no", "0", "n", "f", ""})
+#: Columns with a fixed meaning; matched ignoring case, never plotted.
+RESERVED_COLUMNS: frozenset[str] = frozenset({"name", "image", "fact", "sfx", "speculation"})
 
 
 def parse_date_to_fractional_year(val: str) -> tuple[float, bool]:
@@ -17,16 +24,38 @@ def parse_date_to_fractional_year(val: str) -> tuple[float, bool]:
 
     Returns (fractional_year, has_month). has_month is True when the input used
     the YYYY.MM form (even for January, which would otherwise be indistinguishable
-    from a bare integer year).
+    from a bare integer year). A month outside 01-12 is an error, not a decimal year.
     """
     clean = val.strip()
-    match = re.match(r"^(\d{4})\.(\d{1,2})$", clean)
+    match = _YEAR_MONTH.match(clean)
     if match:
         year = int(match.group(1))
         month = int(match.group(2))
-        if 1 <= month <= 12:
-            return year + (month - 1) / 12.0, True
+        if not 1 <= month <= 12:
+            raise ValueError(f"month {match.group(2)} is not between 01 and 12")
+        return year + (month - 1) / 12.0, True
     return float(clean), False
+
+
+def is_remote(ref: str) -> bool:
+    return ref.startswith(("http://", "https://"))
+
+
+def resolve_inside(base_dir: str, ref: str) -> str | None:
+    """Path of ``ref`` under ``base_dir``, or ``None`` when it points outside.
+
+    References in ``data.csv`` come with the dataset, which may be someone
+    else's work: they may only name files of that dataset.
+    """
+    if os.path.isabs(ref):
+        return None
+    base = os.path.realpath(base_dir)
+    path = os.path.realpath(os.path.join(base, ref))
+    try:
+        inside = os.path.commonpath([base, path]) == base
+    except ValueError:  # different drives on Windows
+        inside = False
+    return path if inside else None
 
 
 class ProductDataPoint:
@@ -39,7 +68,6 @@ class ProductDataPoint:
         self.raw_data: dict[str, str] = raw_row
         self.name: str = raw_row.get("name", f"Version {index}")
 
-        # We will parse values dynamically
         self.metrics: dict[str, float] = {}
         self.image_filename: str = raw_row.get("image", "")
         self.fact: str = raw_row.get("fact", "")
@@ -48,31 +76,39 @@ class ProductDataPoint:
         # True when this row is a speculation about an unreleased generation.
         self.is_speculation: bool = False
 
-        # Try to parse all columns as floats where possible
+        # Every other column is numeric where possible.
         for col, val in raw_row.items():
-            if col in ["name", "image", "fact", "sfx"]:
+            if col in ("name", "image", "fact", "sfx"):
                 continue
-            if col.lower() == "speculation":
-                self.is_speculation = val.strip().lower() in (
-                    "true",
-                    "yes",
-                    "1",
-                    "y",
-                    "t",
-                )
+            if col == "speculation":
+                flag = val.strip().lower()
+                if flag not in _TRUE and flag not in _FALSE:
+                    raise ValueError(
+                        f"Row {index + 1} ('{self.name}') has an invalid 'speculation' "
+                        f"value '{val}': use true or false."
+                    )
+                self.is_speculation = flag in _TRUE
+                continue
+            # Thousands separators and dollar signs are tolerated.
+            clean_val: str = val.replace("$", "").replace(",", "").strip()
+            if col.lower() in ("date", "year"):
+                if not clean_val:
+                    continue
+                try:
+                    parsed, has_month = parse_date_to_fractional_year(clean_val)
+                except ValueError as e:
+                    if "month" not in str(e):
+                        continue  # not a number: reported by the loader's X-axis check
+                    raise ValueError(
+                        f"Row {index + 1} ('{self.name}') has an invalid {col} '{val}': {e}."
+                    ) from None
+                self.metrics[col] = parsed
+                self.has_month = self.has_month or has_month
                 continue
             try:
-                # Remove commas, dollar signs, spaces, etc.
-                clean_val: str = val.replace("$", "").replace(",", "").strip()
-                if col.lower() in ["date", "year"]:
-                    parsed, has_month = parse_date_to_fractional_year(clean_val)
-                    self.metrics[col] = parsed
-                    if has_month:
-                        self.has_month = True
-                else:
-                    self.metrics[col] = float(clean_val)
+                self.metrics[col] = float(clean_val)
             except ValueError:
-                # Keep string metrics if needed, but they won't be plot-axes metrics
+                # Text columns stay in raw_data; they are not plotted.
                 pass
 
     def get_metric(self, name: str, default: float = 0.0) -> float:
@@ -84,122 +120,135 @@ class ProductDataPoint:
             return self.metrics["date"]
         if name == "date" and "year" in self.metrics:
             return self.metrics["year"]
-        return self.metrics.get(name, default)
+        return default
 
     def __repr__(self) -> str:
         return f"<ProductDataPoint '{self.name}' metrics={self.metrics}>"
 
 
+@dataclass
+class LoadedCsv:
+    """Result of reading ``data.csv``: sorted points, the X column, data-quality notes."""
+
+    points: list[ProductDataPoint]
+    x_metric: str
+    warnings: list[str] = field(default_factory=list)
+
+
 class DataLoader:
     """Handles loading, parsing, sorting, and validating evolution datasets."""
 
-    NON_METRIC_COLUMNS: ClassVar[set[str]] = {"name", "image", "fact", "sfx", "speculation"}
+    NON_METRIC_COLUMNS: ClassVar[frozenset[str]] = RESERVED_COLUMNS
 
     @staticmethod
     def _normalize_metric_key(metric_name: str) -> str:
-        clean = metric_name.lower().strip()
-        clean = re.sub(r"[^a-z0-9]", "", clean)
-        return clean
+        return re.sub(r"[^a-z0-9]", "", metric_name.lower().strip())
 
     @staticmethod
     def _find_matching_header(requested_metric: str, headers: list[str]) -> str | None:
+        """Exact match ignoring case and punctuation, else the shortest header
+        that contains the request or is contained in it."""
         normalized_request: str = DataLoader._normalize_metric_key(requested_metric)
-        candidates: list[str] = []
-
-        header: str
-        for header in headers:
-            normalized_header: str = DataLoader._normalize_metric_key(header)
-            if normalized_header == normalized_request:
+        if not normalized_request:
+            return None
+        normalized = {header: DataLoader._normalize_metric_key(header) for header in headers}
+        for header, key in normalized.items():
+            if key == normalized_request:
                 return header
-
-        for header in headers:
-            normalized_header = DataLoader._normalize_metric_key(header)
-            if normalized_request in normalized_header or normalized_header in normalized_request:
-                candidates.append(header)
-
-        if len(candidates) == 1:
-            return candidates[0]
-        if len(candidates) > 1:
-            # Prefer the shortest matching header to avoid overly broad matches
-            return min(candidates, key=lambda h: len(DataLoader._normalize_metric_key(h)))
-
-        # Fallback to token intersection matching
-        req_tokens: set[Any] = set(re.findall(r"[a-z0-9]+", normalized_request))
-        for header in headers:
-            header_tokens: set[Any] = set(
-                re.findall(r"[a-z0-9]+", DataLoader._normalize_metric_key(header))
-            )
-            if req_tokens and req_tokens.issubset(header_tokens):
-                return header
-
-        return None
+        candidates = [
+            header
+            for header, key in normalized.items()
+            if key and (normalized_request in key or key in normalized_request)
+        ]
+        # Prefer the shortest matching header to avoid overly broad matches.
+        return min(candidates, key=lambda h: len(normalized[h])) if candidates else None
 
     @staticmethod
     def _resolve_metric(
         metric: str, headers: list[str], allow_year_date_swap: bool = False
     ) -> str | None:
-        """Resolves a metric name to a CSV column, with fuzzy matching."""
+        """Resolves a metric name to a CSV column: exact name, then the
+        ``year``/``date`` alias, then fuzzy matching."""
         if metric in headers:
             return metric
-        resolved = DataLoader._find_matching_header(metric, headers)
-        if resolved is not None:
-            return resolved
         if allow_year_date_swap:
             if metric == "year" and "date" in headers:
                 return "date"
             if metric == "date" and "year" in headers:
                 return "year"
+        return DataLoader._find_matching_header(metric, headers)
+
+    @staticmethod
+    def _read_headers(fieldnames: list[str] | None) -> list[str]:
+        """Trimmed header names; reserved columns are lower-cased (``Name`` -> ``name``)."""
+        if not fieldnames:
+            raise ValueError("data.csv is empty or has no headers.")
+        headers = [h.strip() for h in fieldnames]
+        headers = [h.lower() if h.lower() in RESERVED_COLUMNS else h for h in headers]
+        if any(not h for h in headers):
+            raise ValueError("data.csv has a column without a name in its header row.")
+        duplicates = sorted({h for h in headers if headers.count(h) > 1})
+        if duplicates:
+            raise ValueError(f"data.csv has duplicate columns: {duplicates}")
+        if "name" not in headers:
+            raise ValueError(f"data.csv needs a 'name' column. Found: {headers}")
+        return headers
+
+    @staticmethod
+    def _check_references(dp: ProductDataPoint, row: int, dataset_dir: str) -> str | None:
+        """Validates the row's ``image``; returns a warning for a missing ``sfx`` file."""
+        if dp.image_filename and not is_remote(dp.image_filename):
+            images_dir = os.path.join(dataset_dir, "images")
+            img_path = resolve_inside(images_dir, dp.image_filename)
+            if img_path is None:
+                raise ValueError(
+                    f"Row {row} ('{dp.name}') image '{dp.image_filename}' must be a file "
+                    "inside the dataset's images/ folder or an http(s) URL."
+                )
+            if not os.path.isfile(img_path):
+                raise ValueError(
+                    f"Row {row} ('{dp.name}') references missing image: "
+                    f"{os.path.join(images_dir, dp.image_filename)}"
+                )
+        # ``sfx`` may be an absolute path (a shared effects library).
+        if dp.sfx_filename and not os.path.isfile(os.path.join(dataset_dir, dp.sfx_filename)):
+            return f"Row {row} ('{dp.name}') sfx file not found: {dp.sfx_filename}"
         return None
 
     @staticmethod
-    def _resolve_all_metrics(
-        headers: list[str],
-        x_metric: str,
-    ) -> str | None:
-        """Resolves the x metric against CSV headers."""
-        return DataLoader._resolve_metric(x_metric, headers, allow_year_date_swap=True)
-
-    @staticmethod
-    def _validate_resolved_metrics(
-        headers: list[str],
-        x_metric: str,
-        resolved_x: str | None,
-    ) -> str:
-        """Validates the resolved X metric and returns it."""
-        if resolved_x is None:
-            raise ValueError(f"X-metric '{x_metric}' not found in CSV columns: {headers}")
-        if resolved_x != x_metric:
-            logger.debug(f"Resolved X-metric '{x_metric}' to CSV column '{resolved_x}'.")
-        return resolved_x
-
-    @staticmethod
     def _parse_rows(
-        reader: csv.DictReader,
+        reader: "csv.DictReader[str]",
         headers: list[str],
         resolved_x: str,
-        images_dir: str,
+        dataset_dir: str,
+        warnings: list[str],
     ) -> list[ProductDataPoint]:
         """Parses CSV rows into ProductDataPoint objects with validation."""
         data_points: list[ProductDataPoint] = []
         for i, row in enumerate(reader):
-            clean_row: dict[str | Any, str | Any] = {
-                k.strip(): (v.strip() if v is not None else "")
-                for k, v in row.items()
-                if k is not None
-            }
-            dp = ProductDataPoint(clean_row, i)
-            if not dp.name.strip():
+            if None in row:
+                raise ValueError(f"Row {i + 1} has more cells than the header has columns.")
+            if any(v is None for v in row.values()):
+                raise ValueError(f"Row {i + 1} has fewer cells than the header has columns.")
+            clean_row = {h: (v or "").strip() for h, v in zip(headers, row.values())}
+            if not clean_row["name"]:
                 raise ValueError(f"Row {i + 1} has a blank required 'name' value.")
-            if resolved_x not in dp.metrics:
+            dp = ProductDataPoint(clean_row, i)
+            x_value = dp.metrics.get(resolved_x)
+            if x_value is None or not math.isfinite(x_value):
                 raise ValueError(
-                    f"Row {i + 1} ('{dp.name}') has a missing or non-numeric X-metric '{resolved_x}': '{clean_row.get(resolved_x)}'"
+                    f"Row {i + 1} ('{dp.name}') has a missing or non-numeric X-metric "
+                    f"'{resolved_x}': '{clean_row.get(resolved_x)}'"
                 )
-            if dp.image_filename and not dp.image_filename.startswith(("http://", "https://")):
-                img_path: str = os.path.join(images_dir, dp.image_filename)
-                if not os.path.exists(img_path):
-                    raise ValueError(
-                        f"Row {i + 1} ('{dp.name}') references missing image: {img_path}"
-                    )
+            if re.fullmatch(r"\d{4}\.\d", clean_row.get(resolved_x, "")):
+                warnings.append(
+                    f"Row {i + 1} ('{dp.name}') date '{clean_row[resolved_x]}' is read as "
+                    f"month {clean_row[resolved_x][-1]}; write the month with two digits "
+                    "(2018.01 for January, 2018.10 for October)."
+                )
+            warning = DataLoader._check_references(dp, i + 1, dataset_dir)
+            if warning:
+                warnings.append(warning)
             data_points.append(dp)
         return data_points
 
@@ -209,7 +258,7 @@ class DataLoader:
     ) -> None:
         """A metric column may be blank on some rows, but never non-numeric."""
         for header in headers:
-            if header == resolved_x or header.lower() in DataLoader.NON_METRIC_COLUMNS:
+            if header == resolved_x or header in RESERVED_COLUMNS:
                 continue
             for point in data_points:
                 raw = point.raw_data.get(header, "").strip()
@@ -223,75 +272,62 @@ class DataLoader:
                     )
 
     @staticmethod
-    def _load_dataset_impl(
-        dataset_dir: str,
-        x_metric: str,
-    ) -> tuple[list[ProductDataPoint], str]:
-        """Core implementation: loads, parses, validates and sorts data.csv.
+    def _check_row_set(data_points: list[ProductDataPoint]) -> None:
+        """At least one released row, and speculation rows only after the last of them."""
+        if not data_points:
+            raise ValueError("No valid product iterations loaded from data.csv.")
+        flags = [point.is_speculation for point in data_points]
+        if all(flags):
+            raise ValueError("data.csv must contain at least one non-speculation row.")
+        if True in flags and not all(flags[flags.index(True) :]):
+            first = data_points[flags.index(True)]
+            raise ValueError(
+                f"Speculation row '{first.name}' is dated before a released row. "
+                "Speculation rows must come after every released generation."
+            )
 
-        Returns ``(data_points, resolved_x_metric)``.
-        """
+    @staticmethod
+    def load(dataset_dir: str, x_metric: str) -> LoadedCsv:
+        """Loads, parses, validates and chronologically sorts ``data.csv``."""
         csv_path: str = os.path.join(dataset_dir, "data.csv")
-        images_dir: str = os.path.join(dataset_dir, "images")
-
         if not os.path.exists(csv_path):
             raise FileNotFoundError(f"Missing data.csv in dataset directory: {dataset_dir}")
 
-        with open(csv_path, "r", encoding="utf-8-sig") as f:
+        warnings: list[str] = []
+        with open(csv_path, "r", encoding="utf-8-sig", newline="") as f:
             reader: csv.DictReader[str] = csv.DictReader(f)
-            if not reader.fieldnames:
-                raise ValueError("data.csv is empty or has no headers.")
-            headers: list[str] = [h.strip() for h in reader.fieldnames]
-
-            resolved_x = DataLoader._validate_resolved_metrics(
-                headers, x_metric, DataLoader._resolve_all_metrics(headers, x_metric)
+            headers = DataLoader._read_headers(
+                list(reader.fieldnames) if reader.fieldnames else None
             )
-            data_points = DataLoader._parse_rows(reader, headers, resolved_x, images_dir)
+            resolved_x = DataLoader._resolve_metric(x_metric, headers, allow_year_date_swap=True)
+            if resolved_x is None or resolved_x in RESERVED_COLUMNS:
+                raise ValueError(f"X-metric '{x_metric}' not found in CSV columns: {headers}")
+            if resolved_x != x_metric:
+                logger.debug(f"Resolved X-metric '{x_metric}' to CSV column '{resolved_x}'.")
+            data_points = DataLoader._parse_rows(reader, headers, resolved_x, dataset_dir, warnings)
 
         DataLoader._check_numeric_columns(headers, resolved_x, data_points)
 
-        # Chronological order (X values are already validated as numeric).
+        # Chronological order (X values are already validated as finite numbers).
         data_points.sort(key=lambda dp: dp.get_metric(resolved_x))
 
-        if not data_points:
-            raise ValueError("No valid product iterations loaded from data.csv.")
-        if not any(not point.is_speculation for point in data_points):
-            raise ValueError("data.csv must contain at least one non-speculation row.")
+        DataLoader._check_row_set(data_points)
 
-        y_metrics = [
-            header
-            for header in headers
-            if header != resolved_x
-            and header.lower() not in DataLoader.NON_METRIC_COLUMNS
+        if not any(
+            header != resolved_x
+            and header not in RESERVED_COLUMNS
             and any(header in point.metrics for point in data_points)
-        ]
-        if not y_metrics:
+            for header in headers
+        ):
             raise ValueError(
                 "data.csv must contain at least one numeric metric besides the X axis."
             )
-
-        return data_points, resolved_x
+        return LoadedCsv(data_points, resolved_x, warnings)
 
     @staticmethod
-    def load_dataset(
-        dataset_dir: str,
-        x_metric: str,
-    ) -> list[ProductDataPoint]:
+    def load_dataset(dataset_dir: str, x_metric: str) -> list[ProductDataPoint]:
         """Loads data.csv from directory, parses it, validates assets, and sorts chronologically."""
-        data_points, _ = DataLoader._load_dataset_impl(dataset_dir, x_metric)
-        return data_points
-
-    @staticmethod
-    def load_dataset_with_metric(
-        dataset_dir: str,
-        x_metric: str,
-    ) -> tuple[list[ProductDataPoint], str]:
-        """Like :meth:`load_dataset` but also returns the resolved X-metric column name.
-
-        Use this when the caller needs to know which CSV column was ultimately
-        chosen as the X axis (e.g. ``'date'`` resolved from a requested ``'year'``).
-        """
-        return DataLoader._load_dataset_impl(dataset_dir, x_metric)
+        return DataLoader.load(dataset_dir, x_metric).points
 
 
 #: Smallest ratio drawn on a log axis; values at or below zero are clamped here.
@@ -399,7 +435,8 @@ class Dataset:
         generation and the last row has a value: leading blanks are allowed (the
         curve starts later) and blanks in between are interpolated.
         """
-        points, resolved_x = DataLoader.load_dataset_with_metric(dataset_dir, x_metric)
+        loaded = DataLoader.load(dataset_dir, x_metric)
+        points, resolved_x = loaded.points, loaded.x_metric
         if not include_speculation:
             points = [p for p in points if not p.is_speculation]
         available = cls._plottable_metrics(points, resolved_x)
@@ -422,7 +459,9 @@ class Dataset:
                 "data.csv must contain at least one numeric metric with a value on a "
                 "released row and on the last row."
             )
-        return cls(points, resolved_x, selected, y_scale)
+        dataset = cls(points, resolved_x, selected, y_scale)
+        dataset.warnings[:0] = loaded.warnings
+        return dataset
 
     @staticmethod
     def _plottable_metrics(points: list[ProductDataPoint], x_metric: str) -> list[str]:

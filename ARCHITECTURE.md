@@ -11,6 +11,7 @@ src/fromversionzero/
 ├── timeline.py             pure frame planning: Timeline, FrameState, SFX cues
 ├── interpolator.py         easing and the damped camera
 ├── renderer.py             layout scaling, graph primitives, frame entry point
+├── drawing.py              alpha-blending draw handle, word wrapping
 ├── renderer_landscape.py   landscape composition, intro/outro cards
 ├── renderer_portrait.py    Shorts composition
 ├── components.py           product card, facts card, Shorts hero, generation mark
@@ -54,10 +55,12 @@ flowchart LR
    function of its inputs, so frames render in any order across worker
    processes (each builds its own `Renderer`). A test asserts parallel and
    sequential output are byte-identical. Worker errors fail the render; only an
-   unavailable process pool falls back to sequential rendering.
+   unavailable process pool falls back to sequential rendering. Linked media is
+   downloaded once by the pipeline before rendering; renderers read the cache
+   only, so every worker sees the same media and none retries a broken link.
 5. **Encoding** — frames stream into FFmpeg over a pipe (no intermediate
-   images). Audio is mixed into a copy of the stream; if that fails the silent
-   render is kept. Files are written to temp names and atomically renamed.
+   images). Audio is mixed into a copy of the stream and padded or cut to the
+   video's exact duration; if mixing fails the silent render is kept. Files are written to temp names and atomically renamed.
 
 ## Rendering model
 

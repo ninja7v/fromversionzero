@@ -52,6 +52,11 @@ METRIC_ICON_KEYWORDS: tuple[tuple[str, str], ...] = (
 )
 
 
+#: Local product images are downscaled to this longest side when loaded. The
+#: largest on-screen use (the Shorts hero of a 4K render) is about 4000 px.
+MAX_IMAGE_SIDE = 4096
+
+
 def normalize_key(name: str) -> str:
     return "".join(ch for ch in name.lower() if ch.isalnum())
 
@@ -68,12 +73,13 @@ class AssetManager:
         dataset_dir: str,
         media: MediaSettings | None = None,
         media_cache: MediaCache | None = None,
+        offline: bool = False,
     ) -> None:
         from fromversionzero.config import MediaSettings
 
         self.dataset_dir = dataset_dir
         self.media: MediaSettings = media or MediaSettings()
-        self.media_cache: MediaCache = media_cache or MediaCache()
+        self.media_cache: MediaCache = media_cache or MediaCache(offline=offline)
         self.font_roles: dict[str, str] = {
             "display": "Montserrat-Light",
             "heading": "Montserrat-SemiBold",
@@ -84,6 +90,7 @@ class AssetManager:
         self.image_cache: dict[str, Image.Image | None] = {}
         self.resized_cache: dict[tuple[str, int, int], Image.Image] = {}
         self.icon_cache: dict[tuple[str, int], Image.Image] = {}
+        self._icon_paths: dict[str, str | None] = {}
         self.icon_dirs: list[str] = [
             d
             for d in (os.path.join(dataset_dir, "icons"), os.path.join(dataset_dir, "Icons"))
@@ -178,6 +185,12 @@ class AssetManager:
         return None
 
     def _metric_icon_path(self, metric_name: str) -> str | None:
+        """Icon file for a metric (remembered: it is asked for every drawn point)."""
+        if metric_name not in self._icon_paths:
+            self._icon_paths[metric_name] = self._search_metric_icon(metric_name)
+        return self._icon_paths[metric_name]
+
+    def _search_metric_icon(self, metric_name: str) -> str | None:
         key = normalize_key(metric_name)
         # An icon named after the metric (e.g. icons/units_sold.svg) wins.
         for directory in self.icon_dirs:
@@ -269,6 +282,7 @@ class AssetManager:
                 levels=self.media.image_levels,
                 invert=self.media.image_invert,
                 stylized=self.media.stylize,
+                line=self.media.line,
             )
             self.image_cache[filename] = remote
             return remote
@@ -276,7 +290,11 @@ class AssetManager:
         image: Image.Image | None = None
         if os.path.isfile(path):
             try:
-                image = Image.open(path).convert("RGBA")
+                with Image.open(path) as source:
+                    # Decode large photos at reduced size: every worker keeps its own copy.
+                    source.draft("RGB", (MAX_IMAGE_SIDE, MAX_IMAGE_SIDE))
+                    image = source.convert("RGBA")
+                image.thumbnail((MAX_IMAGE_SIDE, MAX_IMAGE_SIDE), Image.Resampling.LANCZOS)
             except (OSError, ValueError) as e:
                 logger.warning(f"Error loading image {filename}: {e}")
         self.image_cache[filename] = image
@@ -347,6 +365,7 @@ class AssetManager:
                     levels=self.media.logo_levels,
                     invert=self.media.logo_invert,
                     stylized=self.media.stylize,
+                    line=self.media.line,
                 )
                 self.image_cache[cache_key] = fit_in_square(mark, box) if mark else None
             return self.image_cache[cache_key]

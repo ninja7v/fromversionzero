@@ -204,3 +204,109 @@ def test_parallel_rendering_keeps_a_bounded_number_of_frames_in_flight() -> None
         worst = max(worst, pool.submitted - consumed)
     assert consumed == len(frames)
     assert worst * frame_bytes <= video_pipeline.IN_FLIGHT_BYTES + frame_bytes * workers * 2
+
+
+def _durations(path: Path) -> tuple[float, float]:
+    """(video, audio) stream durations in seconds, decoded with FFmpeg."""
+
+    def decoded(stream: str) -> float:
+        result = subprocess.run(
+            [find_ffmpeg(), "-hide_banner", "-i", str(path), "-map", stream, "-f", "null", "-"],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        h, m, s = re.findall(r"time=(\d+):(\d+):([\d.]+)", result.stderr)[-1]
+        return int(h) * 3600 + int(m) * 60 + float(s)
+
+    return decoded("0:v"), decoded("0:a")
+
+
+def _long_silent_video(path: Path, seconds: int = 3) -> None:
+    writer = FFmpegVideoWriter(str(path), 64, 64, 4, make_config().encoding)
+    for _ in range(4 * seconds):
+        writer.write(np.zeros((64, 64, 3), dtype=np.uint8))
+    writer.close()
+
+
+@pytest.mark.parametrize("loop", [True, False])
+def test_short_soundtrack_never_shortens_the_video(tmp_path: Path, loop: bool) -> None:
+    silent, music, output = tmp_path / "silent.mp4", tmp_path / "music.wav", tmp_path / "out.mp4"
+    _long_silent_video(silent)
+    _wav(music, 1.0)
+    handler = AudioHandler(make_config(music={"fade_in": 0, "fade_out": 0, "loop": loop}))
+    assert handler.merge_audio(str(silent), str(music), [], 3.0, str(output))
+    video, audio = _durations(output)
+    assert video == pytest.approx(3.0, abs=0.05)
+    assert audio == pytest.approx(3.0, abs=0.1)
+
+
+def test_sfx_without_music_never_shortens_the_video(tmp_path: Path) -> None:
+    silent, sfx, output = tmp_path / "silent.mp4", tmp_path / "hit.wav", tmp_path / "out.mp4"
+    _long_silent_video(silent)
+    _wav(sfx, 0.2)
+    handler = AudioHandler(make_config())
+    events = [(str(sfx), 0.25), (str(sfx), 2.0)]
+    assert handler.merge_audio(str(silent), "", events, 3.0, str(output))
+    video, audio = _durations(output)
+    assert video == pytest.approx(3.0, abs=0.05)
+    assert audio == pytest.approx(3.0, abs=0.1)
+
+
+def test_long_soundtrack_is_cut_at_the_end_of_the_video(tmp_path: Path) -> None:
+    silent, music, output = tmp_path / "silent.mp4", tmp_path / "music.wav", tmp_path / "out.mp4"
+    _silent_video(silent)
+    _wav(music, 5.0)
+    assert AudioHandler(make_config()).merge_audio(str(silent), str(music), [], 1.0, str(output))
+    video, audio = _durations(output)
+    assert video == pytest.approx(1.0, abs=0.05)
+    assert audio == pytest.approx(1.0, abs=0.1)
+
+
+def test_audio_inputs_cannot_open_network_protocols() -> None:
+    from fromversionzero.audio_handler import build_audio_command
+
+    cmd = build_audio_command("ffmpeg", "v.mp4", "m.mp3", [("s.wav", 1.0)], 5.0, "o.mp4", 1, 0, 0)
+    for audio_input in ("m.mp3", "s.wav"):
+        at = cmd.index(audio_input)
+        assert cmd[at - 3 : at] == ["-protocol_whitelist", "file", "-i"]
+    assert "-shortest" not in cmd
+
+
+def test_render_workers_never_download_media(
+    widget_dir: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Links are fetched once by the pipeline; renderers only read the cache."""
+    from fromversionzero import media
+    from fromversionzero.renderer import Renderer
+
+    monkeypatch.setenv(media.CACHE_ENV, str(tmp_path / "cache"))
+    calls: list[str] = []
+
+    def no_network(request: object, timeout: float) -> object:
+        calls.append(request.full_url)  # type: ignore[attr-defined]
+        raise OSError("offline")
+
+    monkeypatch.setattr(media, "_open", no_network)
+    csv = (widget_dir / "data.csv").read_text(encoding="utf-8")
+    (widget_dir / "data.csv").write_text(
+        csv.replace(",w1.png,", ",https://example.org/w1.png,"), encoding="utf-8"
+    )
+    pipeline = VideoPipeline(make_config(), str(widget_dir))
+    dataset = pipeline.load_dataset()
+    pipeline._prefetch_media(dataset)
+    assert calls == ["https://example.org/w1.png"]
+    renderer = Renderer(pipeline.config, dataset, str(widget_dir), offline_media=True)
+    frames = TimelinePlanner(pipeline.config, dataset).plan()
+    renderer.render(frames[len(frames) // 2])
+    assert len(calls) == 1, "a renderer retried a download the pipeline already attempted"
+
+
+def test_render_still_defaults_to_the_complete_timeline(widget_dir: Path) -> None:
+    pipeline = VideoPipeline(make_config(), str(widget_dir))
+    image, t, total = pipeline.render_still()
+    assert image.size == (426, 240)
+    timeline = TimelinePlanner(pipeline.config, pipeline.load_dataset()).timeline
+    assert t == pytest.approx(timeline.hold_end - timeline.dt)
+    assert total == pytest.approx(timeline.total_duration)
+    assert pipeline.render_still(999.0)[1] < total  # clamped to the last frame

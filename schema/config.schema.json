@@ -330,6 +330,12 @@
           "default": true,
           "title": "Stylize",
           "type": "boolean"
+        },
+        "line_color": {
+          "default": "source",
+          "pattern": "^(source|#[0-9A-Fa-f]{6})$",
+          "title": "Line Color",
+          "type": "string"
         }
       },
       "title": "MediaSettings",
@@ -361,6 +367,11 @@
           "minimum": 0,
           "title": "Fade Out",
           "type": "number"
+        },
+        "loop": {
+          "default": true,
+          "title": "Loop",
+          "type": "boolean"
         }
       },
       "title": "MusicSettings",
@@ -546,6 +557,11 @@
     },
     "theme": {
       "default": "signal",
+      "enum": [
+        "blueprint",
+        "paper",
+        "signal"
+      ],
       "title": "Theme",
       "type": "string"
     },
@@ -641,7 +657,8 @@
         "logo_invert": false,
         "image_levels": 2,
         "image_invert": false,
-        "stylize": true
+        "stylize": true,
+        "line_color": "source"
       }
     },
     "music": {
@@ -650,7 +667,8 @@
         "file": "soundtrack.mp3",
         "volume": 0.7,
         "fade_in": 2.0,
-        "fade_out": 3.0
+        "fade_out": 3.0,
+        "loop": true
       }
     },
     "mix_sfx": {
@@ -706,5 +724,5 @@
   },
   "title": "FromVersionZero configuration",
   "type": "object",
-  "$id": "https://fromversionzero.dev/schema/config-v1.json"
+  "$id": "https://raw.githubusercontent.com/ninja7v/fromversionzero/main/schema/config.schema.json"
 }

@@ -14,6 +14,14 @@ from fromversionzero.encoder import FFmpegNotFoundError, find_ffmpeg
 logger = logging.getLogger(__name__)
 
 
+#: Every audio input is brought to this format before mixing, so a mono 8 kHz
+#: effect and a stereo 44.1 kHz soundtrack mix predictably.
+AUDIO_FORMAT = "aformat=sample_fmts=fltp:sample_rates=48000:channel_layouts=stereo"
+#: Audio files come from the dataset. Only local files may be opened, so a
+#: playlist disguised as ``soundtrack.mp3`` cannot make FFmpeg fetch URLs.
+AUDIO_INPUT_OPTIONS = ["-protocol_whitelist", "file"]
+
+
 def build_audio_command(
     ffmpeg: str,
     video_path: str,
@@ -24,38 +32,48 @@ def build_audio_command(
     volume: float,
     fade_in: float,
     fade_out: float,
+    loop_music: bool = True,
 ) -> list[str]:
-    """FFmpeg command that muxes the video stream (copied) with the mixed audio."""
+    """FFmpeg command that muxes the video stream (copied) with the mixed audio.
+
+    The audio track always lasts exactly ``duration`` seconds: the mix is
+    padded with silence and trimmed, so a soundtrack or effect shorter than
+    the video never shortens the video.
+    """
     cmd = [ffmpeg, "-y", "-hide_banner", "-loglevel", "error", "-i", video_path]
     filters: list[str] = []
     mix: list[str] = []
     index = 1
     if soundtrack:
-        cmd += ["-i", soundtrack]
+        if loop_music:
+            cmd += ["-stream_loop", "-1"]
+        cmd += [*AUDIO_INPUT_OPTIONS, "-i", soundtrack]
         fade_in, fade_out = min(fade_in, duration), min(fade_out, duration)
         filters.append(
-            f"[{index}:a]atrim=end={duration},volume={volume},"
+            f"[{index}:a]{AUDIO_FORMAT},atrim=end={duration},volume={volume},"
             f"afade=t=in:ss=0:d={fade_in},"
             f"afade=t=out:st={max(0.0, duration - fade_out)}:d={fade_out}[music]"
         )
         mix.append("[music]")
         index += 1
     for n, (path, start) in enumerate(sfx_events):
-        cmd += ["-i", path]
+        cmd += [*AUDIO_INPUT_OPTIONS, "-i", path]
         delay = max(0, int(start * 1000))
-        filters.append(f"[{index}:a]adelay={delay}|{delay}[sfx{n}]")
+        filters.append(f"[{index}:a]{AUDIO_FORMAT},adelay=delays={delay}:all=1[sfx{n}]")
         mix.append(f"[sfx{n}]")
         index += 1
     if len(mix) > 1:
         filters.append(
-            f"{''.join(mix)}amix=inputs={len(mix)}:duration=first:dropout_transition=0"
-            ":normalize=0[audio]"
+            f"{''.join(mix)}amix=inputs={len(mix)}:duration=longest:dropout_transition=0"
+            ":normalize=0[mix]"
         )
-        audio_label = "[audio]"
+        mixed = "[mix]"
     else:
-        audio_label = mix[0]
-    cmd += ["-filter_complex", ";".join(filters), "-map", "0:v", "-map", audio_label]
-    cmd += ["-c:a", "aac", "-b:a", "192k", "-c:v", "copy", "-shortest"]
+        mixed = mix[0]
+    # Silence after the last sound, then an exact cut at the video's end.
+    filters.append(f"{mixed}apad,atrim=end={duration}[audio]")
+    cmd += ["-filter_complex", ";".join(filters), "-map", "0:v", "-map", "[audio]"]
+    cmd += ["-c:a", "aac", "-b:a", "192k", "-c:v", "copy", "-t", f"{duration}"]
     cmd += ["-movflags", "+faststart", output_path]
     return cmd
 
@@ -109,6 +127,7 @@ class AudioHandler:
             self.config.music_volume,
             self.config.music_fade_in,
             self.config.music_fade_out,
+            self.config.music_loop,
         )
         logger.debug("FFmpeg audio: " + " ".join(cmd))
         try:

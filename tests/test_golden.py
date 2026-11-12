@@ -1,6 +1,6 @@
 # tests/test_golden.py
 # MIT License - Copyright (c) 2026 Luc Prevost
-# Visual regression: key frames of the Widget fixture compared to reviewed PNGs.
+# Golden frames: key frames of the Widget fixture compared to reviewed PNGs.
 #
 # After an intentional visual change, regenerate and review the images:
 #     FVZ_UPDATE_GOLDEN=1 pytest tests/test_golden.py

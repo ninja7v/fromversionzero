@@ -95,10 +95,24 @@ def test_sfx_cues_are_planned_at_reveal_starts(tmp_path: Path) -> None:
         f"name,year,p,sfx\nA,2000,1,a.wav\nB,2001,2,\nC,2002,3,{elsewhere}\n", encoding="utf-8"
     )
     config = make_config(mix_sfx=True, speculation=False)
-    planner = TimelinePlanner(config, Dataset.load(str(tmp_path), "year"), str(tmp_path))
+    dataset = Dataset.load(str(tmp_path), "year")
+    assert sum("sfx file not found" in w for w in dataset.warnings) == 2
+    planner = TimelinePlanner(config, dataset, str(tmp_path))
     cues = planner.sfx_cues()
     assert [c.path for c in cues] == [str(tmp_path / "a.wav"), elsewhere]
     assert cues[0].start == pytest.approx(0.5)
     assert cues[1].start == pytest.approx(0.5 + 2 * 0.75)
     muted = TimelinePlanner(make_config(mix_sfx=False), planner.dataset, str(tmp_path))
     assert muted.sfx_cues() == []
+
+
+@pytest.mark.parametrize("fact_card_duration", [0.75, 1.0, 4.0])
+def test_fact_card_never_pops_between_frames(fact_card_duration: float) -> None:
+    """A card fades in and out once: its opacity never jumps between frames,
+    including when the hold starts."""
+    config = make_config(fps=40, fact_card_duration=fact_card_duration, hold_duration=1.0)
+    planner = TimelinePlanner(config, Dataset.load(str(WIDGET_DIR), "date"))
+    hold_end = planner.timeline.hold_end
+    alphas = [f.fact_card_alpha for f in planner.plan() if f.kind == "graph" and f.t < hold_end]
+    assert max(alphas) == 1.0
+    assert max(abs(b - a) for a, b in itertools.pairwise(alphas)) <= 0.2

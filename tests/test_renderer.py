@@ -12,8 +12,8 @@ from conftest import WIDGET_DIR, make_config
 from PIL import Image
 
 from fromversionzero.data_loader import Dataset
+from fromversionzero.drawing import BlendDraw
 from fromversionzero.renderer import (
-    BlendDraw,
     Renderer,
     format_metric_value,
     format_multiple,
@@ -94,7 +94,6 @@ def test_fade_state_is_restored_after_an_exception(landscape: Renderer) -> None:
     with pytest.raises(RuntimeError), landscape.faded(0.1):
         raise RuntimeError("boom")
     assert landscape.graph_alpha == 1.0
-    assert landscape.colors_rgba == landscape.base_colors
 
 
 def test_progress_changes_the_frame(landscape: Renderer) -> None:

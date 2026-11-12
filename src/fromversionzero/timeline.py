@@ -249,11 +249,15 @@ class TimelinePlanner:
                 continue
             pct = min(1.0, (graph_t - start) / cfg.reveal_duration)
             revealed[i] = pct
-            if graph_t < start + tl.cycle_duration:
-                fact_duration = min(tl.cycle_duration, cfg.fact_card_duration)
-                if graph_t - start < fact_duration:
-                    fact_index = i
-                    fact_alpha = card_alpha(graph_t - start, fact_duration)
+            # A card lasts at most its generation's cycle; the last one may run
+            # on into the hold. One envelope per card, so it never reappears.
+            window = tl.cycle_duration
+            if i == len(self.released) - 1:
+                window += cfg.hold_duration
+            fact_duration = min(window, cfg.fact_card_duration)
+            if graph_t < start + window and graph_t - start < fact_duration:
+                fact_index = i
+                fact_alpha = card_alpha(graph_t - start, fact_duration)
             # Camera follows the moving head of the newest curve segment.
             if i > 0 and pct < 1.0:
                 eased = ease_sigmoid(pct)
@@ -266,15 +270,10 @@ class TimelinePlanner:
                 xs.append(ds.x(point))
                 ys.extend(ds.y(point, m) for m in ds.y_metrics)
 
-        # Hold phase: every released point visible, last fact fades out.
+        # Hold phase: every released point visible.
         if graph_t >= tl.evolution_duration:
             for i in range(len(self.released)):
                 revealed[i] = 1.0
-            hold_elapsed = graph_t - tl.evolution_duration
-            hold_fact = min(cfg.fact_card_duration, cfg.hold_duration)
-            if hold_elapsed < hold_fact:
-                fact_index = len(self.released) - 1
-                fact_alpha = max(0.0, 1.0 - hold_elapsed / hold_fact)
 
         if xs:
             # Wide framing on the first point, then ease into asymmetric

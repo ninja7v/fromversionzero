@@ -94,11 +94,3 @@ THEMES: dict[str, dict[str, Any]] = {
         "ambient": False,
     },
 }
-
-#: Retired theme names and the theme that replaces them.
-DEPRECATED_THEMES: dict[str, str] = {
-    "dark_modern": "signal",
-    "neon_cyber": "signal",
-    "minimal": "signal",
-    "light_modern": "paper",
-}

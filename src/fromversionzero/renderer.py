@@ -22,6 +22,7 @@ from fromversionzero.asset_manager import AssetManager
 from fromversionzero.components import apply_alpha_to_image
 from fromversionzero.config import VideoConfig
 from fromversionzero.data_loader import Dataset, ProductDataPoint
+from fromversionzero.drawing import BlendDraw, wrap_text
 from fromversionzero.interpolator import ease_sigmoid
 from fromversionzero.renderer_landscape import render_frame_landscape
 from fromversionzero.renderer_portrait import render_frame_shorts
@@ -61,40 +62,6 @@ _RESAMPLING: dict[str, Image.Resampling] = {
     "nearest": Image.Resampling.NEAREST,
     "bicubic": Image.Resampling.BICUBIC,
 }
-
-
-class BlendDraw(ImageDraw.ImageDraw):
-    """``ImageDraw`` that alpha-blends onto an RGB image, *including text*.
-
-    Pillow's blend mode honours fill alpha for shapes but draws text fully
-    opaque; translucent text is therefore rendered through a coverage mask.
-    """
-
-    def __init__(self, image: Image.Image) -> None:
-        super().__init__(image, "RGBA")
-        self._target = image
-
-    def text(
-        self, xy: Any, text: Any, fill: Any = None, font: Any = None, *args: Any, **kwargs: Any
-    ) -> None:
-        alpha = fill[3] if isinstance(fill, tuple) and len(fill) == 4 else 255
-        if alpha >= 255 or not text:
-            super().text(xy, text, fill, font, *args, **kwargs)
-            return
-        if alpha <= 0:
-            return
-        left, top, right, bottom = self.textbbox(xy, text, font=font, **kwargs)
-        x0, y0 = math.floor(left) - 1, math.floor(top) - 1
-        x1, y1 = math.ceil(right) + 1, math.ceil(bottom) + 1
-        if x1 <= x0 or y1 <= y0:
-            return
-        mask = Image.new("L", (x1 - x0, y1 - y0), 0)
-        ImageDraw.Draw(mask).text((xy[0] - x0, xy[1] - y0), text, fill=alpha, font=font, **kwargs)
-        self._target.paste(tuple(fill[:3]), (x0, y0, x1, y1), mask)
-
-
-def blend_draw(image: Image.Image) -> BlendDraw:
-    return BlendDraw(image)
 
 
 def hex_to_rgb(hex_str: str) -> tuple[int, int, int]:
@@ -220,7 +187,15 @@ class Renderer:
     downsampled, so layouts look identical at every output size.
     """
 
-    def __init__(self, config: VideoConfig, dataset: Dataset, dataset_dir: str) -> None:
+    def __init__(
+        self,
+        config: VideoConfig,
+        dataset: Dataset,
+        dataset_dir: str,
+        offline_media: bool = False,
+    ) -> None:
+        """``offline_media`` makes linked media come from the cache only (the
+        pipeline downloads everything once before its workers start)."""
         self.config: VideoConfig = config.for_output_mode()
         self.dataset: Dataset = dataset
         self.dataset_dir: str = dataset_dir
@@ -240,7 +215,11 @@ class Renderer:
         self.draw_h: int = self.design_h * self.unit
         self._set_margins()
 
-        self.asset_manager = AssetManager(dataset_dir, media=self.config.media)
+        self.asset_manager = AssetManager(
+            dataset_dir, media=self.config.media, offline=offline_media
+        )
+        #: Tinted, faded point icons, keyed by (metric, size, color, alpha).
+        self._icon_cache: dict[tuple[str, int, tuple[int, ...], int], Image.Image] = {}
         self.asset_manager.font_roles = dict(self.config.fonts)
         self.downsample_filter: Image.Resampling = _RESAMPLING[self.config.downsample_filter]
         self.ambient: bool = bool(THEMES.get(self.config.theme, {}).get("ambient", False))
@@ -250,7 +229,6 @@ class Renderer:
             key: (*hex_to_rgb(value), 255) if isinstance(value, str) else list(value)
             for key, value in self.config.colors.items()
         }
-        self.colors_rgba: dict[str, Any] = dict(self.base_colors)
         self.graph_alpha: float = 1.0
 
     # ------------------------------------------------------------------
@@ -304,15 +282,10 @@ class Renderer:
     def faded(self, graph_alpha: float) -> Iterator[None]:
         """Temporarily fades every theme color (graph intro/outro), exception-safe."""
         self.graph_alpha = graph_alpha
-        self.colors_rgba = {
-            key: (v[0], v[1], v[2], int(v[3] * graph_alpha)) if isinstance(v, tuple) else v
-            for key, v in self.base_colors.items()
-        }
         try:
             yield
         finally:
             self.graph_alpha = 1.0
-            self.colors_rgba = dict(self.base_colors)
 
     @contextmanager
     def clipped_to_graph(self, canvas: Image.Image) -> Iterator[None]:
@@ -464,6 +437,8 @@ class Renderer:
         """Landscape: a regular grid. Shorts: first and latest revealed generation only."""
         if not self.shorts_mode:
             span = max(xmax - xmin, 1e-9)
+            if span > 100:  # not a year axis any more: keep about ten ticks
+                return _nice_linear_ticks(xmin, xmax, target=10)
             if span <= 1.5:
                 step = 0.25
             else:
@@ -687,17 +662,11 @@ class Renderer:
                 outline=(*color[:3], int(150 * pulse * self.graph_alpha)),
                 width=u,
             )
-        icon: Image.Image | None
-        try:
-            icon = self.asset_manager.get_metric_icon(metric, int(20 * u * size_mult))
-        except (OSError, ValueError):
-            icon = None
+        alpha = self.graph_alpha * bright
+        faded = self._point_icon(metric, int(20 * u * size_mult), color, alpha)
         if is_head:
-            self._draw_point_glow(draw, sx, sy, (8 if icon else 6) * u * size_mult, color, bright)
-        if icon is not None:
-            tinted = Image.new("RGBA", icon.size, color[:3] + (255,))
-            tinted.putalpha(icon.getchannel("A"))
-            faded = apply_alpha_to_image(tinted, self.graph_alpha * bright)
+            self._draw_point_glow(draw, sx, sy, (8 if faded else 6) * u * size_mult, color, bright)
+        if faded is not None:
             w, h = faded.size
             canvas.paste(faded, (int(sx - w / 2), int(sy - h / 2)), faded)
             return
@@ -708,6 +677,21 @@ class Renderer:
             outline=color,
             width=2 * u,
         )
+
+    def _point_icon(self, metric: str, size: int, color: Color, alpha: float) -> Image.Image | None:
+        """The metric's icon tinted with ``color`` at ``alpha`` (cached: the same
+        few icons are pasted on every point of every frame)."""
+        key = (metric, size, color[:3], round(alpha * 255))
+        if key not in self._icon_cache:
+            icon = self.asset_manager.get_metric_icon(metric, size)
+            if icon is None:
+                return None
+            tinted = Image.new("RGBA", icon.size, color[:3] + (255,))
+            tinted.putalpha(icon.getchannel("A"))
+            if len(self._icon_cache) > 4096:  # fades create many alpha variants
+                self._icon_cache.clear()
+            self._icon_cache[key] = apply_alpha_to_image(tinted, key[3] / 255)
+        return self._icon_cache[key]
 
     @staticmethod
     def _deconflict_labels(
@@ -1043,21 +1027,3 @@ class Renderer:
             fill=(*self.base_colors["background"][:3], int(255 * alpha)),
             font=font,
         )
-
-
-def wrap_text(
-    draw: ImageDraw.ImageDraw, text: str, font: FreeTypeFont, max_width: float
-) -> list[str]:
-    """Greedy word wrap to ``max_width`` pixels."""
-    lines: list[str] = []
-    current = ""
-    for word in text.split():
-        candidate = f"{current} {word}".strip()
-        if not current or draw.textlength(candidate, font=font) <= max_width:
-            current = candidate
-        else:
-            lines.append(current)
-            current = word
-    if current:
-        lines.append(current)
-    return lines

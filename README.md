@@ -51,11 +51,12 @@ uv run fromversionzero --product Tesla_Model_S
 ## Commands
 
 ```bash
-fromversionzero render   --product NAME [--shorts] [--resolution 720p] [--output-folder DIR]
+fromversionzero render   --product NAME [--shorts] [--resolution 720p] [--output-folder DIR] [--workers N]
+fromversionzero preview  --product NAME [--shorts] [--time 12.5] [-o frame.png]   # one frame as a PNG
 fromversionzero validate [--product NAME] [--strict] [--check-media]   # every dataset when no product is given
 fromversionzero list                                   # datasets under the data root
 fromversionzero schema   [-o schema.json]              # JSON Schema of config files
-fromversionzero mark     SOURCE OUTPUT [--levels 2]    # redraw an image file or URL as line art
+fromversionzero mark     SOURCE OUTPUT [--levels 2] [--line-color #RRGGBB]    # redraw an image file or URL as line art
 ```
 
 `render` is the default command. Datasets are found under `--data-root`,

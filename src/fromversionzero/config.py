@@ -14,22 +14,25 @@ from typing import Annotated, Any, ClassVar, Literal
 
 from pydantic import (
     AfterValidator,
-    AliasChoices,
     BaseModel,
     ConfigDict,
     Field,
     ValidationError,
     field_validator,
-    model_validator,
 )
 
-from fromversionzero.themes import DEPRECATED_THEMES, THEMES
+from fromversionzero.themes import THEMES
 
 logger = logging.getLogger(__name__)
 
 #: Version of the dataset/config contract. Bump when a breaking change is made
 #: to ``config.json`` or ``data.csv`` semantics.
 SCHEMA_VERSION: int = 1
+
+#: Where the schema of this contract version is published (the file in ``schema/``).
+SCHEMA_ID: str = (
+    "https://raw.githubusercontent.com/ninja7v/fromversionzero/main/schema/config.schema.json"
+)
 
 RESOLUTIONS: dict[str, tuple[int, int]] = {
     "240p": (426, 240),
@@ -41,6 +44,12 @@ RESOLUTIONS: dict[str, tuple[int, int]] = {
     "4k": (3840, 2160),
     "8k": (7680, 4320),
 }
+
+
+#: Smallest and largest side accepted for ``WIDTHxHEIGHT`` (8K is 7680 wide).
+#: The drawing canvas is at least ``ssaa_factor`` times larger, so an unbounded
+#: size would exhaust memory before anything is drawn.
+MIN_SIDE, MAX_SIDE = 64, 8192
 
 
 def parse_resolution(value: str) -> tuple[int, int]:
@@ -60,6 +69,11 @@ def parse_resolution(value: str) -> tuple[int, int]:
                     raise ValueError(
                         f"Resolution '{value}' must use even dimensions (H.264 yuv420p)."
                     )
+                if not (MIN_SIDE <= width <= MAX_SIDE and MIN_SIDE <= height <= MAX_SIDE):
+                    raise ValueError(
+                        f"Resolution '{value}' is out of range: each side must be "
+                        f"{MIN_SIDE}-{MAX_SIDE} pixels."
+                    )
                 return width, height
     raise ValueError(f"Invalid resolution '{value}'. Use a named resolution or WIDTHxHEIGHT.")
 
@@ -71,13 +85,30 @@ def _check_hex(value: str) -> str:
     return value
 
 
-def _check_resolution(value: str) -> str:
-    parse_resolution(value)
-    return value.lower()
+def _check_landscape(value: str) -> str:
+    width, height = parse_resolution(value)
+    if height > width:
+        raise ValueError(
+            f"'{value}' is taller than wide. The landscape layout needs a landscape "
+            "resolution; for a portrait video use Shorts mode (--shorts) and "
+            "'shorts_overrides.resolution'."
+        )
+    return value.strip().lower()
+
+
+def _check_portrait(value: str) -> str:
+    width, height = parse_resolution(value)
+    if width > height:
+        raise ValueError(
+            f"'{value}' is wider than tall. The Shorts layout needs a portrait "
+            "resolution such as 1080x1920."
+        )
+    return value.strip().lower()
 
 
 HexColor = Annotated[str, AfterValidator(_check_hex)]
-Resolution = Annotated[str, AfterValidator(_check_resolution)]
+LandscapeResolution = Annotated[str, AfterValidator(_check_landscape)]
+PortraitResolution = Annotated[str, AfterValidator(_check_portrait)]
 NonNegative = Annotated[float, Field(ge=0)]
 Positive = Annotated[float, Field(gt=0)]
 
@@ -117,6 +148,8 @@ class MusicSettings(_Section):
     volume: Annotated[float, Field(ge=0, le=1)] = 0.7
     fade_in: NonNegative = 2.0
     fade_out: NonNegative = 3.0
+    #: Repeat a soundtrack shorter than the video (False: silence after it ends).
+    loop: bool = True
 
 
 class ShortsOverrides(_Section):
@@ -126,7 +159,7 @@ class ShortsOverrides(_Section):
     steady_duration: NonNegative = 1.0
     hold_duration: NonNegative = 3.0
     speculation_duration: NonNegative = 5.0
-    resolution: Resolution = "1080x1920"
+    resolution: PortraitResolution = "1080x1920"
 
 
 class EncodingSettings(_Section):
@@ -158,6 +191,13 @@ class MediaSettings(_Section):
     image_invert: bool = False
     #: Redraw remote media as FromVersionZero line art (False shows it unchanged).
     stylize: bool = True
+    #: Line colour of the line art: "source" keeps the media's own colours.
+    line_color: Annotated[str, Field(pattern=r"^(source|#[0-9A-Fa-f]{6})$")] = "source"
+
+    @property
+    def line(self) -> str | None:
+        """Fixed line colour for :func:`fromversionzero.marks.stylize`, or None for the source's."""
+        return None if self.line_color == "source" else self.line_color
 
 
 class Labels(_Section):
@@ -186,7 +226,7 @@ class ConfigFile(_Section):
 
     # --- Content ---
     title: str = "Product Evolution"
-    motto: str = Field(default="", validation_alias=AliasChoices("motto", "moto"))
+    motto: str = ""
     x_metric: str = "date"
     metrics: list[str] | None = Field(default=None, min_length=1)
     y_scale: Literal["auto", "log", "linear"] = "auto"
@@ -195,14 +235,14 @@ class ConfigFile(_Section):
 
     # --- Video ---
     fps: Annotated[int, Field(gt=0, le=240)] = 30
-    resolution: Resolution = "1080p"
+    resolution: LandscapeResolution = "1080p"
     ssaa_factor: Annotated[int, Field(ge=1, le=4)] = 2
     downsample_filter: Literal["bicubic", "lanczos", "bilinear", "nearest"] = "bicubic"
     image_transition: Literal["fade", "small_to_big_to_medium", "none"] = "fade"
     encoding: EncodingSettings = EncodingSettings()
 
     # --- Style ---
-    theme: str = "signal"
+    theme: str = Field(default="signal", json_schema_extra={"enum": [*sorted(THEMES)]})
     colors: ColorOverrides = ColorOverrides()
     fonts: FontOverrides = FontOverrides()
 
@@ -229,29 +269,16 @@ class ConfigFile(_Section):
     output_folder: str = ""
     shorts: bool = False
     speculation: bool = True
-    show_motto: bool = Field(default=True, validation_alias=AliasChoices("show_motto", "show_moto"))
+    show_motto: bool = True
     show_logo: bool = True
     show_legend: bool = True
     show_facts: bool = True
     show_progress_bar: bool = True
 
-    @model_validator(mode="before")
-    @classmethod
-    def _warn_deprecated_keys(cls, data: Any) -> Any:
-        if isinstance(data, dict):
-            for old, new in (("moto", "motto"), ("show_moto", "show_motto")):
-                if old in data:
-                    logger.warning(f"Config key '{old}' is deprecated; rename it to '{new}'.")
-        return data
-
     @field_validator("theme")
     @classmethod
     def _known_theme(cls, value: str) -> str:
         name = value.lower()
-        if name in DEPRECATED_THEMES:
-            replacement = DEPRECATED_THEMES[name]
-            logger.warning(f"Theme '{name}' was retired; using '{replacement}' instead.")
-            return replacement
         if name not in THEMES:
             raise ValueError(f"Invalid theme '{value}'. Expected one of: {sorted(THEMES)}")
         return name
@@ -260,7 +287,7 @@ class ConfigFile(_Section):
 def config_json_schema() -> dict[str, Any]:
     """JSON Schema for ``video.json`` / ``config.json`` files."""
     schema = ConfigFile.model_json_schema(by_alias=True, mode="validation")
-    schema["$id"] = f"https://fromversionzero.dev/schema/config-v{SCHEMA_VERSION}.json"
+    schema["$id"] = SCHEMA_ID
     schema["title"] = "FromVersionZero configuration"
     return schema
 
@@ -352,6 +379,7 @@ class VideoConfig:
     music_volume: float
     music_fade_in: float
     music_fade_out: float
+    music_loop: bool
     mix_sfx: bool
     product_name: str
     output_folder: str
@@ -466,6 +494,7 @@ class VideoConfig:
             music_volume=s.music.volume,
             music_fade_in=s.music.fade_in,
             music_fade_out=s.music.fade_out,
+            music_loop=s.music.loop,
             mix_sfx=s.mix_sfx,
             product_name=s.product_name,
             output_folder=s.output_folder,
@@ -547,6 +576,7 @@ class VideoConfig:
                 "volume": self.music_volume,
                 "fade_in": self.music_fade_in,
                 "fade_out": self.music_fade_out,
+                "loop": self.music_loop,
             },
             "mix_sfx": self.mix_sfx,
             "product_name": self.product_name,

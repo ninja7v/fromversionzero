@@ -222,3 +222,61 @@ def test_row_with_every_metric_blank_is_interpolated(tmp_path: Path) -> None:
     ds = Dataset.load(path, "year")
     b = ds.points[1]
     assert ds.value(b, "p") == pytest.approx(2.5) and ds.value(b, "q") == pytest.approx(20.0)
+
+
+# ----------------------------------------------------------------------
+# Malformed files are rejected with a message naming the row
+# ----------------------------------------------------------------------
+@pytest.mark.parametrize(
+    ("csv_text", "message"),
+    [
+        ("name,date,p\nA,2000,1\nB,nan,2\n", "non-numeric X-metric"),
+        ("name,date,p\nA,2000,1\nB,inf,2\n", "non-numeric X-metric"),
+        ("name,date,p\nA,2000.13,1\n", "month 13"),
+        ("name,date,p\nA,2000.00,1\n", "month 00"),
+        ("date,p\n2000,1\n", "needs a 'name' column"),
+        ("name,date,p,p\nA,2000,1,2\n", "duplicate columns"),
+        ("name,date,,p\nA,2000,x,2\n", "without a name"),
+        ("name,date,p\nA,2000,1,extra\n", "more cells"),
+        ("name,date,p\nA,2000\n", "fewer cells"),
+        ("name,date,p,speculation\nA,2000,1,maybe\n", "invalid 'speculation'"),
+        (
+            "name,date,p,speculation\nA,2000,1,false\nB,2005,2,true\nC,2010,3,false\n",
+            "must come after every released",
+        ),
+        ("name,date,p,image\nA,2000,1,../data.csv\n", "inside the dataset's images/ folder"),
+    ],
+)
+def test_malformed_csv_is_rejected(tmp_path: Path, csv_text: str, message: str) -> None:
+    (tmp_path / "data.csv").write_text(csv_text, encoding="utf-8")
+    with pytest.raises(ValueError, match=message):
+        Dataset.load(str(tmp_path), "date")
+
+
+def test_reserved_headers_ignore_case(tmp_path: Path) -> None:
+    (tmp_path / "data.csv").write_text(
+        "Name,date,p,Fact,Speculation\nA,2000,1,first,false\nB,2005,2,next,TRUE\n",
+        encoding="utf-8",
+    )
+    dataset = Dataset.load(str(tmp_path), "date")
+    assert [p.name for p in dataset.points] == ["A", "B"]
+    assert dataset.points[0].fact == "first" and dataset.points[1].is_speculation
+
+
+def test_x_metric_prefers_the_year_date_alias_over_fuzzy_matches(tmp_path: Path) -> None:
+    """'date' is a substring of 'update_count'; the year column is the real X axis."""
+    (tmp_path / "data.csv").write_text(
+        "name,year,update_count,p\nA,2000,5,1\nB,2005,3,2\n", encoding="utf-8"
+    )
+    dataset = Dataset.load(str(tmp_path), "date")
+    assert dataset.x_metric == "year"
+    assert dataset.y_metrics == ["update_count", "p"]
+
+
+def test_single_digit_month_and_missing_sfx_are_warnings(tmp_path: Path) -> None:
+    (tmp_path / "data.csv").write_text(
+        "name,date,p,sfx\nA,2000.1,1,\nB,2001.10,2,gone.wav\n", encoding="utf-8"
+    )
+    warnings = Dataset.load(str(tmp_path), "date").warnings
+    assert any("two digits" in w for w in warnings)
+    assert any("sfx file not found: gone.wav" in w for w in warnings)
