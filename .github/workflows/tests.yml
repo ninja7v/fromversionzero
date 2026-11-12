@@ -20,7 +20,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v6
+      - uses: astral-sh/setup-uv@v7
       - run: uv sync --locked --extra dev
       - name: Ruff format
         run: uv run ruff format --check .
@@ -50,7 +50,7 @@ jobs:
     continue-on-error: ${{ matrix.experimental }}
     steps:
       - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v6
+      - uses: astral-sh/setup-uv@v7
         with:
           python-version: ${{ matrix.python }}
       - run: uv sync --locked --extra dev
@@ -71,7 +71,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v6
+      - uses: astral-sh/setup-uv@v7
         with:
           python-version: "3.12"
       - name: Pytest with the minimum dependency versions
@@ -85,7 +85,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v6
+      - uses: astral-sh/setup-uv@v7
       - name: Build sdist and wheel
         run: uv build
       - name: Smoke-test the installed wheel outside the checkout
@@ -108,7 +108,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v6
+      - uses: astral-sh/setup-uv@v7
       - run: uv sync --locked
       - name: Validate the example dataset
         run: uv run fromversionzero validate --data-root examples --strict
@@ -124,7 +124,7 @@ jobs:
         with:
           repository: ninja7v/fromversionzero-data
           path: data
-      - uses: astral-sh/setup-uv@v6
+      - uses: astral-sh/setup-uv@v7
       - run: uv sync --locked
       - name: Validate every published dataset
         run: uv run fromversionzero validate --data-root data --strict
