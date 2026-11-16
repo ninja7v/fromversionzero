@@ -19,9 +19,19 @@ system library is needed on Linux, macOS or Windows.
 uv run ruff format --check .
 uv run ruff check .
 uv run mypy
-uv run lizard -L 120 -C 15 -w src tests
+uv run lizard -L 120 -C 15 -w src tests .github/scripts
 uv run pytest --cov
 ```
+
+CI runs only what a change can affect: `.github/scripts/select_checks.py`
+follows the import graph from the files a pull request changes (all of its
+commits) to the test files that reach them. Documentation runs nothing; data
+files (`examples/`, `schema/`, `video.json`) run their tests on one Linux job;
+code and test changes run on Linux for every Python plus macOS and Windows;
+dependency, CI and unrecognised files, and the scheduled (1st and 15th of the
+month) and manual runs use the full OS x Python matrix. The job summary of
+`changes` lists why each check was selected. When a new kind of file needs its
+own rule, add it to `classify()` and a case to `tests/test_select_checks.py`.
 
 ## Visual changes
 

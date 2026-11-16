@@ -1,4 +1,4 @@
-# <img src="src/fromversionzero/resources/branding/FromVersionZero.png" alt="FromVersionZero logo" width="30" align="center"> FromVersionZero 🎬📈
+# <img src="src/fromversionzero/resources/branding/FromVersionZero.png" alt="FromVersionZero logo" width="50" align="center"> FromVersionZero 🎬📈
 
 Render animated videos that show how a product evolved, generation by
 generation: every metric becomes a curve measured as a multiple of the first
@@ -96,6 +96,27 @@ FVZ_UPDATE_GOLDEN=1 uv run pytest tests/test_golden.py   # after intended visual
 
 See [CONTRIBUTING.md](CONTRIBUTING.md), [ARCHITECTURE.md](ARCHITECTURE.md)
 and the [CHANGELOG](CHANGELOG.md).
+
+## The data: fromversionzero-data
+
+FromVersionZero is the generator; the stories it tells come from
+[**fromversionzero-data**](https://github.com/ninja7v/fromversionzero-data),
+the companion repository holding every published dataset (cars, phones, AI
+models, races...).
+
+- **Source of truth for the data format**: its
+  [DATA_STANDARDS.md](https://github.com/ninja7v/fromversionzero-data/blob/main/DATA_STANDARDS.md)
+  defines how datasets are written and sourced. New products and corrections
+  are contributed there, not here.
+- **Kept in sync by CI**: its CI validates every dataset against this
+  repository's `main` branch, and this repository's CI validates them again
+  whenever the validation code changes and twice a month. The JSON Schema and
+  `fromversionzero validate` form the contract between the two.
+- **`examples/`** holds one dataset copied from it, so this repository works
+  and is tested on its own.
+- **Open data**: the datasets are under CC BY 4.0 (see below).
+
+Clone it as `data/` to render any product (see [Quick start](#quick-start)).
 
 ## License
 

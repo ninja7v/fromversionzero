@@ -1,11 +1,16 @@
 name: CI
 
+# Jobs run only when a change needs them: the "changes" job maps the files changed
+# by every commit of a pull request to main to the checks they affect, following
+# the import graph (see .github/scripts/select_checks.py). Scheduled and manual
+# runs check everything. Make "CI result" the required status check: it fails when a
+# job failed and passes when the jobs a change does not need were skipped.
+
 on:
-  push:
-    branches: [main]
   pull_request:
+    branches: [main]
   schedule:
-    - cron: "0 7 * * 1"   # weekly: the datasets change independently of this repo
+    - cron: "0 7 1,15 * *"   # twice a month: the datasets change independently of this repo
   workflow_dispatch:
 
 permissions:
@@ -16,8 +21,32 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  quality:
+  changes:
     runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      tests: ${{ steps.select.outputs.tests }}
+      matrix: ${{ steps.select.outputs.matrix }}
+      lowest_tests: ${{ steps.select.outputs.lowest_tests }}
+      quality: ${{ steps.select.outputs.quality }}
+      package: ${{ steps.select.outputs.package }}
+      datasets: ${{ steps.select.outputs.datasets }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # the diff spans every commit of the pull request
+      - id: select
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+        run: python3 .github/scripts/select_checks.py "$EVENT" "$BASE" "$HEAD"
+
+  quality:
+    needs: changes
+    if: needs.changes.outputs.quality == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v6
@@ -29,25 +58,19 @@ jobs:
       - name: Mypy
         run: uv run mypy
       - name: Complexity (lizard)
-        run: uv run lizard -L 120 -C 15 -w src tests
+        run: uv run lizard -L 120 -C 15 -w src tests .github/scripts
 
   test:
-    needs: quality
+    needs: [changes, quality]
+    # After quality passed, or was not needed.
+    if: ${{ !cancelled() && !failure() && needs.changes.outputs.tests != '' }}
     strategy:
       fail-fast: false
-      matrix:
-        # Every supported Python on every OS.
-        os: [ubuntu-latest, macos-latest, windows-latest]
-        python: ["3.12", "3.13", "3.14"]
-        experimental: [false]
-        include:
-          # Pre-release: reported, but does not fail the run.
-          - { os: ubuntu-latest, python: "3.15", experimental: true }
-          - { os: macos-latest, python: "3.15", experimental: true }
-          - { os: windows-latest, python: "3.15", experimental: true }
+      matrix: ${{ fromJSON(needs.changes.outputs.matrix) }}
     name: test (${{ matrix.os }}, ${{ matrix.python }})
     runs-on: ${{ matrix.os }}
-    continue-on-error: ${{ matrix.experimental }}
+    timeout-minutes: 15
+    continue-on-error: ${{ matrix.experimental }}   # pre-release Python: reported only
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v6
@@ -55,7 +78,11 @@ jobs:
           python-version: ${{ matrix.python }}
       - run: uv sync --locked --extra dev
       - name: Pytest
-        run: uv run pytest --cov --cov-report=term --cov-report=xml -W error::DeprecationWarning
+        shell: bash
+        env:
+          TESTS: ${{ needs.changes.outputs.tests }}
+        # $TESTS is unquoted on purpose: one argument per test file.
+        run: uv run pytest $TESTS --cov --cov-report=term --cov-report=xml -W error::DeprecationWarning
       - name: Upload golden-frame diffs
         if: failure()
         uses: actions/upload-artifact@v4
@@ -67,22 +94,28 @@ jobs:
   lowest:
     # The oldest dependency versions pyproject.toml allows must still work.
     # Golden frames and the schema snapshot are tied to the locked versions.
-    needs: quality
+    needs: [changes, quality]
+    if: ${{ !cancelled() && !failure() && needs.changes.outputs.lowest_tests != '' }}
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v6
         with:
           python-version: "3.12"
       - name: Pytest with the minimum dependency versions
+        env:
+          TESTS: ${{ needs.changes.outputs.lowest_tests }}
         run: >
           uv run --isolated --resolution lowest-direct --extra dev
-          pytest -W error::DeprecationWarning --deselect tests/test_golden.py
+          pytest $TESTS -W error::DeprecationWarning --deselect tests/test_golden.py
           --deselect tests/test_config.py::test_committed_schema_is_up_to_date
 
   package:
-    needs: quality
+    needs: [changes, quality]
+    if: ${{ !cancelled() && !failure() && needs.changes.outputs.package == 'true' }}
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v6
@@ -103,21 +136,14 @@ jobs:
           name: dist
           path: dist/
 
-  examples:
-    needs: quality
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v6
-      - run: uv sync --locked
-      - name: Validate the example dataset
-        run: uv run fromversionzero validate --data-root examples --strict
-
   datasets:
     # fromversionzero-data is the source of truth for the data format: every
-    # published dataset must validate against the generator.
-    needs: quality
+    # published dataset must validate against the generator. Runs twice a month, and
+    # when the validation code or the example changes.
+    needs: [changes, quality]
+    if: ${{ !cancelled() && !failure() && needs.changes.outputs.datasets == 'true' }}
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - uses: actions/checkout@v4
@@ -132,3 +158,17 @@ jobs:
         run: |
           diff -r -x description.md examples/Vehicle/Porsche_911 data/Vehicle/Porsche_911
           diff examples/Vehicle/units.json data/Vehicle/units.json
+
+  result:
+    name: CI result
+    needs: [changes, quality, test, lowest, package, datasets]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Every needed job passed
+        env:
+          RESULTS: ${{ join(needs.*.result, ' ') }}
+        run: |
+          echo "Job results: $RESULTS"
+          case " $RESULTS " in *" failure "*|*" cancelled "*) exit 1;; esac
