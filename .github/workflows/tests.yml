@@ -32,7 +32,7 @@ jobs:
       package: ${{ steps.select.outputs.package }}
       datasets: ${{ steps.select.outputs.datasets }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0   # the diff spans every commit of the pull request
       - id: select
@@ -48,7 +48,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: astral-sh/setup-uv@v6
       - run: uv sync --locked --extra dev
       - name: Ruff format
@@ -72,7 +72,7 @@ jobs:
     timeout-minutes: 15
     continue-on-error: ${{ matrix.experimental }}   # pre-release Python: reported only
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: astral-sh/setup-uv@v6
         with:
           python-version: ${{ matrix.python }}
@@ -99,7 +99,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: astral-sh/setup-uv@v6
         with:
           python-version: "3.12"
@@ -117,7 +117,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: astral-sh/setup-uv@v6
       - name: Build sdist and wheel
         run: uv build
@@ -145,8 +145,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7
         with:
           repository: ninja7v/fromversionzero-data
           path: data
